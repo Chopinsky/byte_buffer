@@ -3,5 +3,5 @@ pub mod manager;
 
 pub mod prelude {
     pub use crate::buffer::{ByteBuffer, BufferOp};
-    pub use crate::manager::{init, reserve};
+    pub use crate::manager::{init, reserve, try_reserve, release};
 }

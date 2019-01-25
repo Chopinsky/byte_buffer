@@ -1,14 +1,16 @@
+use std::io::ErrorKind;
 use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering, Once, ONCE_INIT};
-use std::vec;
-use crate::buffer::ByteBuffer;
+use std::time::{Duration, SystemTime};
+use crate::buffer::{ByteBuffer, BufferOp};
 
-static mut BUFFER: Option<Vec<Vec<u8>>> = None;
+static mut BUFFER: Option<Vec<ByteBuffer>> = None;
 static mut DEFAULT_CAPACITY: usize = 1;
 
 static mut LOCK: AtomicBool = AtomicBool::new(false);
 static mut BUF_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 const ONCE: Once = ONCE_INIT;
+const LOCK_TIMEOUT: Duration = Duration::from_millis(64);
 const DEFAULT_GROWTH: usize = 4;
 const BUF_ROOF: usize = 65535;
 
@@ -17,7 +19,7 @@ pub fn init(size: usize, capacity: usize) {
         let mut buffer = Vec::with_capacity(size);
 
         (0..size).for_each(|_| {
-            buffer.push(vec::from_elem(0, capacity));
+            buffer.push(ByteBuffer::new(capacity));
         });
 
         unsafe {
@@ -33,30 +35,35 @@ pub fn reserve() -> ByteBuffer {
         Some(buf) => buf,
         None => unsafe {
             let cap = DEFAULT_CAPACITY;
-            let (vec, inc) =
+            let (mut buf, inc) =
                 if let Some(ref mut buffer) = BUFFER {
                     // the BUFFER store is still valid
                     if BUF_SIZE.load(Ordering::SeqCst) > BUF_ROOF {
                         // already blow the memory guard, be gentle
-                        (vec::from_elem(0, cap), 1)
+                        (ByteBuffer::new(cap), 1)
                     } else {
                         // grow the buffer with pre-determined size
-                        (0..DEFAULT_GROWTH).for_each(|_| {
-                            buffer.push(vec::from_elem(0, cap));
-                        });
+                        if lock().is_ok() {
+                            (0..DEFAULT_GROWTH - 1).for_each(|_| {
+                                buffer.push(ByteBuffer::new(cap));
+                            });
+
+                            unlock();
+                        }
 
                         // don't bother pop again, lend a new slice
-                        (vec::from_elem(0, cap), DEFAULT_GROWTH + 1)
+                        (ByteBuffer::new(cap), DEFAULT_GROWTH)
                     }
                 } else {
                     // can't get a hold of the BUFFER store, just make the slice
-                    (vec::from_elem(0, cap), 1)
+                    (ByteBuffer::new(cap), 1)
                 };
 
             // update the buffer size -- including the lent out ones
             BUF_SIZE.fetch_add(inc, Ordering::SeqCst);
 
-            ByteBuffer::new(vec)
+            buf.update_status(true);
+            buf
         }
     };
 
@@ -66,17 +73,13 @@ pub fn reserve() -> ByteBuffer {
 pub fn try_reserve() -> Option<ByteBuffer> {
     unsafe {
         // wait for the lock
-        loop {
-            // use a loop-and-hold method for cheap lock check
-            if lock() { break; }
+        if lock().is_err() {
+            return None;
         }
 
-        let res =
+        let mut buf =
             if let Some(ref mut buffer) = BUFFER {
-                match buffer.pop() {
-                    Some(vec) => Some(ByteBuffer::new(vec)),
-                    None => None,
-                }
+                buffer.pop()
             } else {
                 None
             };
@@ -84,20 +87,40 @@ pub fn try_reserve() -> Option<ByteBuffer> {
         // the protected section is finished, release the lock
         unlock();
 
-        res
+        if let Some(ref mut b) = buf {
+            b.update_status(true);
+        }
+
+        buf
     }
 }
 
-pub(crate) fn push_back(vec: Vec<u8>) {
+pub fn release(buf: ByteBuffer) {
+    push_back(buf);
+}
+
+pub(crate) fn push_back(buf: ByteBuffer) {
+    let mut buf_slice = buf;
+
+    // the ownership of the buffer slice is returned, update the status as so regardless if it
+    // needs to be dropped right away
+    buf_slice.update_status(false);
+
     unsafe {
         if BUF_SIZE.load(Ordering::SeqCst) > BUF_ROOF {
             // if we've issued too many buffer slices, just let this one expire on itself
             BUF_SIZE.fetch_sub(1, Ordering::SeqCst);
+
             return;
         }
 
         if let Some(ref mut buffer) = BUFFER {
-            buffer.push(vec);
+            buf_slice.reset();
+
+            if lock().is_ok() {
+                buffer.push(buf_slice);
+                unlock();
+            }
         }
     }
 }
@@ -106,15 +129,33 @@ pub(crate) fn buffer_capacity() -> usize {
     unsafe { DEFAULT_CAPACITY }
 }
 
-fn lock() -> bool {
-    unsafe {
-        match LOCK.compare_exchange(
-            false, true, Ordering::SeqCst, Ordering::SeqCst
-        ) {
-            Ok(res) => res == false,
-            Err(_) => false,
+fn lock() -> Result<(), ErrorKind> {
+    let start = SystemTime::now();
+    loop {
+        let locked = unsafe {
+            match LOCK.compare_exchange(
+                false, true, Ordering::SeqCst, Ordering::SeqCst
+            ) {
+                Ok(res) => res == false,
+                Err(_) => false,
+            }
+        };
+
+        if locked {
+            break;
+        }
+
+        match start.elapsed() {
+            Ok(period) => {
+                if period > LOCK_TIMEOUT {
+                    return Err(ErrorKind::TimedOut);
+                }
+            },
+            _ => return Err(ErrorKind::TimedOut),
         }
     }
+
+    Ok(())
 }
 
 fn unlock() {
