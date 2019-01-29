@@ -88,7 +88,7 @@ impl BufferOp for ByteBuffer {
 impl Drop for ByteBuffer {
     fn drop(&mut self) {
         // if buffer is dropped without being released back to the buffer pool, try save it.
-        if self.is_lent && self.buf.len() == 1 {
+        if self.is_lent {
             // swap the pointer out so it won't be killed by drop
             let vec = self.buf_swap(Vec::new());
 

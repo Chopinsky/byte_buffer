@@ -31,6 +31,10 @@ pub fn init(size: usize, capacity: usize) {
 }
 
 pub fn reserve() -> ByteBuffer {
+    unsafe {
+        debug_assert!(BUFFER.is_some(), "The buffer array has not been initialized!");
+    }
+
     let buf = match try_reserve() {
         Some(buf) => buf,
         None => unsafe {
