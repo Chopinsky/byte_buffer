@@ -5,3 +5,4 @@ authors = ["Jacob Zuo <chopinsky@live.com>"]
 edition = "2018"
 
 [dependencies]
+crossbeam-channel = "^0.3.0"

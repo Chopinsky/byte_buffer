@@ -2,7 +2,9 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="d1d61267-a613-4f10-a11b-7887dda908c6" name="Default Changelist" comment="">
+      <change afterPath="$PROJECT_DIR$/src/lock.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/buffer.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/buffer.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/manager.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/manager.rs" afterDir="false" />
@@ -24,31 +26,51 @@
       <file pinned="false" current-in-tab="false">
         <entry file="file://$PROJECT_DIR$/src/lib.rs">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="360">
-              <caret line="18" column="37" selection-start-line="18" selection-start-column="37" selection-end-line="18" selection-end-column="37" />
-            </state>
-          </provider>
-        </entry>
-      </file>
-      <file pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/src/buffer.rs">
-          <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="660">
-              <caret line="35" column="7" selection-start-line="35" selection-start-column="7" selection-end-line="35" selection-end-column="7" />
+            <state relative-caret-position="60">
+              <caret line="3" selection-start-line="3" selection-end-line="3" />
             </state>
           </provider>
         </entry>
       </file>
       <file pinned="false" current-in-tab="true">
+        <entry file="file://$PROJECT_DIR$/src/buffer.rs">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="379">
+              <caret line="191" column="13" lean-forward="true" selection-start-line="191" selection-start-column="13" selection-end-line="191" selection-end-column="13" />
+              <folding>
+                <element signature="n#!!block;n#InternalOperations#0" />
+                <element signature="e#5054#5128#0" />
+                <element signature="e#6597#6598#0" expanded="true" />
+                <element signature="e#6643#6644#0" expanded="true" />
+              </folding>
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file pinned="false" current-in-tab="false">
         <entry file="file://$PROJECT_DIR$/src/manager.rs">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="128">
-              <caret line="27" column="55" selection-start-line="27" selection-start-column="55" selection-end-line="27" selection-end-column="55" />
+            <state relative-caret-position="900">
+              <caret line="45" column="5" lean-forward="true" selection-start-line="45" selection-start-column="5" selection-end-line="45" selection-end-column="5" />
+              <folding>
+                <element signature="e#1808#1809#0" expanded="true" />
+                <element signature="e#1864#1865#0" expanded="true" />
+                <element signature="n#!!block;n#BufferSlice#0" />
+                <element signature="e#1398#1399#0" expanded="true" />
+                <element signature="e#1439#1440#0" expanded="true" />
+              </folding>
             </state>
           </provider>
         </entry>
       </file>
     </leaf>
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Rust File" />
+      </list>
+    </option>
   </component>
   <component name="FindInProjectRecents">
     <findStrings>
@@ -60,10 +82,13 @@
       <find>= BUFFER</find>
       <find>assert {</find>
       <find>item</find>
+      <find>BufferSlice</find>
+      <find>(crate)</find>
     </findStrings>
     <replaceStrings>
       <replace>LOCK</replace>
       <replace>buf</replace>
+      <replace>ByteBuffer</replace>
     </replaceStrings>
   </component>
   <component name="Git.Settings">
@@ -74,6 +99,8 @@
       <list>
         <option value="$PROJECT_DIR$/LICENSE" />
         <option value="$PROJECT_DIR$/README.md" />
+        <option value="$PROJECT_DIR$/Cargo.toml" />
+        <option value="$PROJECT_DIR$/src/lock.rs" />
         <option value="$PROJECT_DIR$/src/buffer.rs" />
         <option value="$PROJECT_DIR$/src/manager.rs" />
         <option value="$PROJECT_DIR$/src/lib.rs" />
@@ -81,8 +108,8 @@
     </option>
   </component>
   <component name="ProjectFrameBounds" extendedState="1">
-    <option name="x" value="-1303" />
-    <option name="y" value="113" />
+    <option name="x" value="-1419" />
+    <option name="y" value="145" />
     <option name="width" value="1396" />
     <option name="height" value="933" />
   </component>
@@ -115,7 +142,8 @@
     </panes>
   </component>
   <component name="PropertiesComponent">
-    <property name="com.android.tools.idea.instantapp.provision.ProvisionBeforeRunTaskProvider.myTimeStamp" value="1548694366731" />
+    <property name="add_unversioned_files" value="$PROJECT_DIR$/Cargo.lock" />
+    <property name="com.android.tools.idea.instantapp.provision.ProvisionBeforeRunTaskProvider.myTimeStamp" value="1549233857427" />
     <property name="last_opened_file_path" value="$PROJECT_DIR$" />
     <property name="org.rust.cargo.project.model.PROJECT_DISCOVERY" value="true" />
   </component>
@@ -217,9 +245,10 @@
     <servers />
   </component>
   <component name="ToolWindowManager">
-    <frame x="-1303" y="113" width="1396" height="933" extended-state="1" />
+    <frame x="-1419" y="145" width="1396" height="933" extended-state="1" />
+    <editor active="true" />
     <layout>
-      <window_info content_ui="combo" id="Project" order="0" visible="true" weight="0.14371258" />
+      <window_info content_ui="combo" id="Project" order="0" visible="true" weight="0.14595808" />
       <window_info id="Structure" order="1" side_tool="true" weight="0.25" />
       <window_info id="Image Layers" order="2" />
       <window_info id="Designer" order="3" />
@@ -228,7 +257,7 @@
       <window_info id="Favorites" order="6" side_tool="true" />
       <window_info anchor="bottom" id="Message" order="0" />
       <window_info anchor="bottom" id="Find" order="1" />
-      <window_info anchor="bottom" id="Run" order="2" weight="0.501292" />
+      <window_info anchor="bottom" id="Run" order="2" weight="0.76873386" />
       <window_info anchor="bottom" id="Debug" order="3" weight="0.4" />
       <window_info anchor="bottom" id="Cvs" order="4" weight="0.25" />
       <window_info anchor="bottom" id="Inspection" order="5" weight="0.4" />
@@ -318,27 +347,6 @@
         </state>
       </provider>
     </entry>
-    <entry file="file://$USER_HOME$/.rustup/toolchains/stable-x86_64-pc-windows-msvc/lib/rustlib/src/rust/src/liballoc/vec.rs">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="237">
-          <caret line="307" column="4" selection-start-line="307" selection-start-column="4" selection-end-line="307" selection-end-column="4" />
-          <folding>
-            <element signature="e#16182#16183#0" expanded="true" />
-            <element signature="e#16211#16212#0" expanded="true" />
-            <element signature="e#25705#25706#0" expanded="true" />
-            <element signature="e#25724#25725#0" expanded="true" />
-            <element signature="e#38655#38656#0" expanded="true" />
-            <element signature="e#38686#38687#0" expanded="true" />
-            <element signature="e#39002#39003#0" expanded="true" />
-            <element signature="e#39025#39026#0" expanded="true" />
-            <element signature="e#49530#49531#0" expanded="true" />
-            <element signature="e#49576#49577#0" expanded="true" />
-            <element signature="e#69200#69201#0" expanded="true" />
-            <element signature="e#69225#69226#0" expanded="true" />
-          </folding>
-        </state>
-      </provider>
-    </entry>
     <entry file="file://$USER_HOME$/.rustup/toolchains/stable-x86_64-pc-windows-msvc/lib/rustlib/src/rust/src/libcore/slice/mod.rs">
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="237">
@@ -364,24 +372,85 @@
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/src/lib.rs">
+    <entry file="file://$PROJECT_DIR$/Cargo.lock">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="360">
-          <caret line="18" column="37" selection-start-line="18" selection-start-column="37" selection-end-line="18" selection-end-column="37" />
+        <state relative-caret-position="20">
+          <caret line="1" column="20" lean-forward="true" selection-start-line="1" selection-start-column="20" selection-end-line="1" selection-end-column="20" />
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/src/buffer.rs">
+    <entry file="file://$PROJECT_DIR$/Cargo.toml">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="660">
-          <caret line="35" column="7" selection-start-line="35" selection-start-column="7" selection-end-line="35" selection-end-column="7" />
+        <state relative-caret-position="140">
+          <caret line="7" selection-start-line="7" selection-end-line="7" selection-end-column="17" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/src/lock.rs">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="80">
+          <caret line="4" column="57" lean-forward="true" selection-start-line="4" selection-start-column="57" selection-end-line="4" selection-end-column="57" />
+          <folding>
+            <element signature="e#818#819#0" expanded="true" />
+            <element signature="e#860#861#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$USER_HOME$/.rustup/toolchains/stable-x86_64-pc-windows-msvc/lib/rustlib/src/rust/src/liballoc/vec.rs">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="125">
+          <caret line="746" column="11" selection-start-line="746" selection-start-column="11" selection-end-line="746" selection-end-column="11" />
+          <folding>
+            <element signature="e#16182#16183#0" expanded="true" />
+            <element signature="e#16211#16212#0" expanded="true" />
+            <element signature="e#25705#25706#0" expanded="true" />
+            <element signature="e#25724#25725#0" expanded="true" />
+            <element signature="e#26145#26146#0" expanded="true" />
+            <element signature="e#26164#26165#0" expanded="true" />
+            <element signature="e#38655#38656#0" expanded="true" />
+            <element signature="e#38686#38687#0" expanded="true" />
+            <element signature="e#39002#39003#0" expanded="true" />
+            <element signature="e#39025#39026#0" expanded="true" />
+            <element signature="e#49530#49531#0" expanded="true" />
+            <element signature="e#49576#49577#0" expanded="true" />
+            <element signature="e#69200#69201#0" expanded="true" />
+            <element signature="e#69225#69226#0" expanded="true" />
+          </folding>
         </state>
       </provider>
     </entry>
     <entry file="file://$PROJECT_DIR$/src/manager.rs">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="128">
-          <caret line="27" column="55" selection-start-line="27" selection-start-column="55" selection-end-line="27" selection-end-column="55" />
+        <state relative-caret-position="900">
+          <caret line="45" column="5" lean-forward="true" selection-start-line="45" selection-start-column="5" selection-end-line="45" selection-end-column="5" />
+          <folding>
+            <element signature="e#1808#1809#0" expanded="true" />
+            <element signature="e#1864#1865#0" expanded="true" />
+            <element signature="n#!!block;n#BufferSlice#0" />
+            <element signature="e#1398#1399#0" expanded="true" />
+            <element signature="e#1439#1440#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/src/lib.rs">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="60">
+          <caret line="3" selection-start-line="3" selection-end-line="3" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/src/buffer.rs">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="379">
+          <caret line="191" column="13" lean-forward="true" selection-start-line="191" selection-start-column="13" selection-end-line="191" selection-end-column="13" />
+          <folding>
+            <element signature="n#!!block;n#InternalOperations#0" />
+            <element signature="e#5054#5128#0" />
+            <element signature="e#6597#6598#0" expanded="true" />
+            <element signature="e#6643#6644#0" expanded="true" />
+          </folding>
         </state>
       </provider>
     </entry>
