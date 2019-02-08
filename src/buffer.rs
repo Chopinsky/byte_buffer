@@ -26,6 +26,11 @@ pub(crate) enum WorkerOp {
     Shutdown,
 }
 
+pub(crate) enum SliceStatusQuery {
+    Length,
+    Capacity,
+}
+
 pub(crate) struct BufferPool {
     store: Vec<Vec<u8>>,
     pool: Vec<usize>,
@@ -36,12 +41,14 @@ pub(crate) struct BufferPool {
 
 pub(crate) trait PoolManagement {
     fn make(store: Vec<Vec<u8>>, pool: Vec<usize>, slice_capacity: usize, worker_chan: Sender<WorkerOp>);
-    fn capacity() -> usize;
-    fn reset_and_release(id: usize);
+    fn default_capacity() -> usize;
+    fn slice_stat(id: usize, query: SliceStatusQuery) -> usize;
     fn handle_work(rx: Receiver<WorkerOp>);
     fn manage(command: BufOp) -> Option<BufferSlice>;
+    fn reset_and_release(id: usize);
     fn get_writable(id: usize) -> Result<&'static mut Vec<u8>, ErrorKind>;
     fn get_readable(id: usize) -> Result<&'static Vec<u8>, ErrorKind>;
+    fn reset(id: usize);
 }
 
 impl PoolManagement for BufferPool {
@@ -62,7 +69,7 @@ impl PoolManagement for BufferPool {
         }
     }
 
-    fn capacity() -> usize {
+    fn default_capacity() -> usize {
         unsafe {
             if let Some(buf) = BUFFER.as_ref() {
                 buf.slice_capacity
@@ -73,14 +80,15 @@ impl PoolManagement for BufferPool {
         }
     }
 
-    fn reset_and_release(id: usize) {
+    fn slice_stat(id: usize, query: SliceStatusQuery) -> usize {
         unsafe {
             if let Some(buf) = BUFFER.as_ref() {
-                buf.worker_chan
-                    .send(WorkerOp::Cleanup(id))
-                    .unwrap_or_else(|err| {
-                        eprintln!("Failed to release buffer slice: {}, err: {}", id, err);
-                    });
+                match query {
+                    SliceStatusQuery::Length => buf.store[id].len(),
+                    SliceStatusQuery::Capacity => buf.store[id].capacity(),
+                }
+            } else {
+                0
             }
         }
     }
@@ -133,6 +141,18 @@ impl PoolManagement for BufferPool {
         result
     }
 
+    fn reset_and_release(id: usize) {
+        unsafe {
+            if let Some(buf) = BUFFER.as_ref() {
+                buf.worker_chan
+                    .send(WorkerOp::Cleanup(id))
+                    .unwrap_or_else(|err| {
+                        eprintln!("Failed to release buffer slice: {}, err: {}", id, err);
+                    });
+            }
+        }
+    }
+
     fn get_writable(id: usize) -> Result<&'static mut Vec<u8>, ErrorKind> {
         unsafe {
             if let Some(buf) = BUFFER.as_mut() {
@@ -168,21 +188,33 @@ impl PoolManagement for BufferPool {
 
         Err(ErrorKind::NotConnected)
     }
+
+    fn reset(id: usize) {
+        unsafe {
+            if let Some(buf) = BUFFER.as_mut() {
+                buf.reset(id);
+            }
+        }
+    }
 }
 
-trait InternalOperations {
+trait PoolOps {
     fn reserve(&mut self, force: bool) -> Option<BufferSlice>;
     fn release(&mut self, id: usize);
     fn reset(&mut self, id: usize);
-    fn extend(&mut self, count: usize) -> usize;
+    fn extend(&mut self, additional: usize) -> usize;
+    fn expand_slice(&mut self, id: usize, additional: usize);
 }
 
-impl InternalOperations for BufferPool {
+impl PoolOps for BufferPool {
     fn reserve(&mut self, force: bool) -> Option<BufferSlice> {
         match self.pool.pop() {
             Some(id) => Some(BufferSlice::new(id, None)),
             None => {
                 if force {
+
+                    //TODO: try to extend, if failed, use fallback
+
                     Some(BufferSlice::new(
                         self.extend(DEFAULT_GROWTH as usize), None
                     ))
@@ -216,22 +248,38 @@ impl InternalOperations for BufferPool {
         });
     }
 
-    fn extend(&mut self, count: usize) -> usize {
-        assert!(count > 0);
+    fn extend(&mut self, additional: usize) -> usize {
+        assert!(additional > 0);
+
+        //TODO: do not blow up the roof
 
         let capacity = self.slice_capacity;
         let start = self.store.len();
 
-        self.store.reserve(count);
-        self.pool.reserve(count);
+        self.store.reserve(additional);
+        self.pool.reserve(additional);
 
-        (0..count).for_each(|offset| {
+        (0..additional).for_each(|offset| {
             self.store.push(vec::from_elem(0, capacity));
             self.pool.push(start + offset);
         });
 
         // return the last element in the buffer
         self.store.len() - 1
+    }
+
+    fn expand_slice(&mut self, id: usize, additional: usize) {
+        if id >= self.store.len() {
+            return;
+        }
+
+        let start = self.store[id].len();
+        self.store[id].reserve(additional);
+
+        let end = self.store[id].capacity();
+        (start..end).for_each(|_| {
+           self.store[id].push(0);
+        });
     }
 }
 

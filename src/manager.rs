@@ -1,11 +1,12 @@
 #![allow(dead_code)]
 
 use std::io::ErrorKind;
+use std::str;
 use std::sync::{Once, ONCE_INIT};
 use std::thread;
 use std::vec;
 use crate::channel::{self as channel};
-use crate::buffer::{PoolManagement, BufOp, BufferPool};
+use crate::buffer::{PoolManagement, BufOp, BufferPool, SliceStatusQuery};
 
 const ONCE: Once = ONCE_INIT;
 
@@ -35,7 +36,7 @@ impl ByteBuffer {
             Some(val) => val,
             None => BufferSlice {
                 id: 0,
-                fallback: Some(vec::from_elem(0, BufferPool::capacity())),
+                fallback: Some(vec::from_elem(0, BufferPool::default_capacity())),
             },
         }
     }
@@ -101,6 +102,25 @@ impl BufferSlice {
     pub fn copy_to_vec(&self) -> Result<Vec<u8>, ErrorKind> {
         // this will hard-copy the vec content
         Ok(self.as_readable()?.to_vec())
+    }
+
+    pub fn reset(&mut self) {
+        BufferPool::reset(self.id);
+    }
+
+    pub fn try_into_string(&self) -> Result<&str, ErrorKind> {
+        match str::from_utf8(self.as_readable()?) {
+            Ok(raw) => Ok(raw),
+            Err(_) => Err(ErrorKind::InvalidData),
+        }
+    }
+
+    fn len(&self) -> usize {
+        BufferPool::slice_stat(self.id, SliceStatusQuery::Length)
+    }
+
+    fn capacity(&self) -> usize {
+        BufferPool::slice_stat(self.id, SliceStatusQuery::Capacity)
     }
 }
 
