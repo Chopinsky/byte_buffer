@@ -10,5 +10,25 @@
 [docsrs]: https://docs.rs/byte_buffer
 
 ## What is this
-This crate create a byte buffer that can be easy to use and provide enhanced performance for 
-IO-frequent programs.
+This crate provides an easy-to-use and manageable byte buffer in frequent I/O operations, where
+implementations of the Read/Write traits are used extensively. With our pre-allocated buffer 
+pool, your I/O code can save tons of wasted CPU cycles for dynamic buffer allocations, which are 
+often the bottleneck of the throughout performance.
+
+## Use this crate
+To use this crate, add the crate dependency in your project's Cargo.toml file:
+
+```
+[dependencies]
+byte_buffer = "0.1"
+```
+
+Then declare the use of the crate:
+
+```rust
+extern crate byte_buffer;
+use byte_buffer::prelude::*;
+```
+
+## Contributions are welcome!
+Please feel free to submit bug reports or features.
