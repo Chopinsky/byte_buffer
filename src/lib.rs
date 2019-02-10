@@ -10,55 +10,25 @@
 //! byte_buffer = "0.1"
 //! ```
 //!
-//! Then declare the use of the crate:
+//! # Examples
 //!
 //! ```
 //! extern crate byte_buffer;
 //! use byte_buffer::prelude::*;
-//! ```
 //!
-//! # Examples
+//! fn main() {
+//!   // Count of buffer: 10; Buffer capacity: 3
+//!   ByteBuffer::init(10, 3);
 //!
-//! Before use, you need to define the size of the buffer and the capacity of each
-//! buffer slice you would like to acquire in the code.
+//!   // Slice the buffer for use in your code
+//!   let mut buffer = ByteBuffer::slice();
 //!
-//! ```
-//! let v: Vec<i32> = Vec::new();
-//! ```
+//!   // Fill the buffer with some byte data
+//!   io::repeat(0b101).read_exact(buffer.as_writable().unwrap()).unwrap();
 //!
-//! ...or by using the [`vec!`] macro:
-//!
-//! ```
-//! let v: Vec<i32> = vec![];
-//!
-//! let v = vec![1, 2, 3, 4, 5];
-//!
-//! let v = vec![0; 10]; // ten zeroes
-//! ```
-//!
-//! You can [`push`] values onto the end of a vector (which will grow the vector
-//! as needed):
-//!
-//! ```
-//! let mut v = vec![1, 2];
-//!
-//! v.push(3);
-//! ```
-//!
-//! Popping values works in much the same way:
-//!
-//! ```
-//! let mut v = vec![1, 2];
-//!
-//! let two = v.pop();
-//! ```
-//!
-//! Vectors also support indexing (through the [`Index`] and [`IndexMut`] traits):
-//!
-//! ```
-//! let mut v = vec![1, 2, 3];
-//! let three = v[2];
-//! v[1] = v[1] + 5;
+//!   // Read the data out. The buffer will be released back to the pool after going out of the scope
+//!   assert_eq!(buffer.as_readable().unwrap(), [0b101, 0b101, 0b101]);
+//! }
 //! ```
 
 use crossbeam_channel as channel;
