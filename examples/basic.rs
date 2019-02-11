@@ -7,8 +7,8 @@ fn main() {
     ByteBuffer::init(10, 3);
 
     let mut buffer = ByteBuffer::slice();
-    io::repeat(0b101).read_exact(buffer.as_writable().unwrap()).unwrap();
+    io::repeat(0b101).read_exact(buffer.as_writable()).unwrap();
 
-    println!("Slice content: {:?}", buffer.as_readable().unwrap());
-    assert_eq!(buffer.as_readable().unwrap(), [0b101, 0b101, 0b101]);
+    println!("Slice content: {:?}", buffer.read());
+    assert_eq!(buffer.read().unwrap(), [0b101, 0b101, 0b101]);
 }

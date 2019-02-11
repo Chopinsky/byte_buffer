@@ -57,62 +57,91 @@ impl BufferSlice {
         BufferSlice {id, fallback}
     }
 
-    pub fn as_writable(&mut self) -> Result<&mut [u8], ErrorKind> {
-        match self.fallback {
-            Some(ref mut vec) => return Ok(vec.as_mut_slice()),
-            None => {},
+    pub fn as_writable(&mut self) -> &mut [u8] {
+        if let Some(ref mut vec) = self.fallback {
+            return vec.as_mut_slice();
         }
 
         match BufferPool::get_writable(self.id) {
-            Ok(vec) => Ok(vec.as_mut_slice()),
-            Err(e) => Err(e),
+            Ok(vec) => vec.as_mut_slice(),
+            Err(_) => {
+                self.fallback = Some(vec::from_elem(0, BufferPool::default_capacity()));
+                if let Some(ref mut vec) = self.fallback {
+                    return vec.as_mut_slice();
+                }
+
+                unreachable!();
+            },
         }
     }
 
-    pub fn as_writable_vec(&mut self) -> Result<&mut Vec<u8>, ErrorKind> {
-        match self.fallback {
-            Some(ref mut vec) => return Ok(vec),
-            None => {},
+    pub fn as_writable_vec(&mut self) -> &mut Vec<u8> {
+        if let Some(ref mut vec) = self.fallback {
+            return vec;
         }
 
-        BufferPool::get_writable(self.id)
+        match BufferPool::get_writable(self.id) {
+            Ok(vec) => vec,
+            Err(_) => {
+                self.fallback = Some(vec::from_elem(0, BufferPool::default_capacity()));
+                if let Some(ref mut vec) = self.fallback {
+                    return vec;
+                }
+
+                unreachable!();
+            },
+        }
     }
 
-    pub fn as_readable(&self) -> Result<&[u8], ErrorKind> {
-        match self.fallback {
-            Some(ref vec) => return Ok(vec.as_slice()),
-            None => {},
+    pub fn read(&self) -> Option<&[u8]> {
+        if let Some(ref vec) = self.fallback {
+            return Some(vec.as_slice());
         }
 
         match BufferPool::get_readable(self.id) {
-            Ok(vec) => Ok(vec.as_slice()),
-            Err(e) => Err(e),
+            Ok(vec) => Some(vec.as_slice()),
+            Err(e) => {
+                eprintln!("Failed to read the buffer: {:?}...", e);
+                None
+            },
         }
     }
 
-    pub fn as_readable_vec(&self) -> Result<&Vec<u8>, ErrorKind> {
-        match self.fallback {
-            Some(ref vec) => return Ok(vec),
-            None => {},
+    pub fn read_as_vec(&self) -> Option<&Vec<u8>> {
+        if let Some(ref vec) = self.fallback {
+            return Some(vec);
         }
 
-        BufferPool::get_readable(self.id)
+        match BufferPool::get_readable(self.id) {
+            Ok(vec) => Some(vec),
+            Err(e) => {
+                eprintln!("Failed to read the buffer: {:?}...", e);
+                None
+            },
+        }
     }
 
-    pub fn copy_to_vec(&self) -> Result<Vec<u8>, ErrorKind> {
+    pub fn copy_to_vec(&self) -> Vec<u8> {
         // this will hard-copy the vec content
-        Ok(self.as_readable()?.to_vec())
+        match self.read() {
+            Some(slice) => slice.to_vec(),
+            None => Vec::new(),
+        }
     }
 
     pub fn reset(&mut self) {
-        BufferPool::reset(self.id);
+        BufferPool::reset_slice(self.id);
     }
 
     pub fn try_into_string(&self) -> Result<&str, ErrorKind> {
-        match str::from_utf8(self.as_readable()?) {
-            Ok(raw) => Ok(raw),
-            Err(_) => Err(ErrorKind::InvalidData),
+        if let Some(slice) = self.read() {
+            return match str::from_utf8(slice) {
+                Ok(raw) => Ok(raw),
+                Err(_) => Err(ErrorKind::InvalidData),
+            };
         }
+
+        Err(ErrorKind::InvalidData)
     }
 
     fn len(&self) -> usize {

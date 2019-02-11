@@ -48,7 +48,7 @@ pub(crate) trait PoolManagement {
     fn reset_and_release(id: usize);
     fn get_writable(id: usize) -> Result<&'static mut Vec<u8>, ErrorKind>;
     fn get_readable(id: usize) -> Result<&'static Vec<u8>, ErrorKind>;
-    fn reset(id: usize);
+    fn reset_slice(id: usize);
 }
 
 impl PoolManagement for BufferPool {
@@ -189,7 +189,7 @@ impl PoolManagement for BufferPool {
         Err(ErrorKind::NotConnected)
     }
 
-    fn reset(id: usize) {
+    fn reset_slice(id: usize) {
         unsafe {
             if let Some(buf) = BUFFER.as_mut() {
                 buf.reset(id);
