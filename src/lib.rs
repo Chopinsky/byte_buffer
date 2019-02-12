@@ -42,7 +42,7 @@ pub mod prelude {
 }
 
 #[macro_export]
-macro_rules! slice {
+macro_rules! slice_buffer {
     () => {{
         crate::manager::slice()
     }};
@@ -52,12 +52,5 @@ macro_rules! slice {
 macro_rules! try_slice {
     () => {{
         crate::manager::try_slice()
-    }};
-}
-
-#[macro_export]
-macro_rules! release {
-    ($x:ident) => {{
-//        crate::manager::release($x);
     }};
 }

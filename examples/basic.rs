@@ -1,3 +1,4 @@
+#[macro_use]
 extern crate byte_buffer;
 
 use std::io::{self, Read};
