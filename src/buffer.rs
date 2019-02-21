@@ -12,7 +12,7 @@ const DEFAULT_GROWTH: u8 = 4;
 const DEFAULT_CAPACITY: usize = 512;
 
 static mut BUFFER: Option<BufferPool> = None;
-static mut SIZE_CAP: AtomicUsize = AtomicUsize::new(65535);
+static mut SIZE_CAP: AtomicUsize = AtomicUsize::new(512);
 
 pub(crate) enum BufOp {
     Reserve(bool),
@@ -49,6 +49,7 @@ pub(crate) trait PoolManagement {
     fn get_writable(id: usize) -> Result<&'static mut Vec<u8>, ErrorKind>;
     fn get_readable(id: usize) -> Result<&'static Vec<u8>, ErrorKind>;
     fn reset_slice(id: usize);
+    fn set_size_limit(limit: usize);
 }
 
 impl PoolManagement for BufferPool {
@@ -59,6 +60,10 @@ impl PoolManagement for BufferPool {
         worker_chan: Sender<WorkerOp>
     ) {
         unsafe {
+            if store.len() > SIZE_CAP.load(Ordering::SeqCst) {
+                SIZE_CAP.store(store.len(), Ordering::SeqCst);
+            }
+
             BUFFER = Some(BufferPool {
                 store,
                 pool,
@@ -70,26 +75,22 @@ impl PoolManagement for BufferPool {
     }
 
     fn default_capacity() -> usize {
-        unsafe {
-            if let Some(buf) = BUFFER.as_ref() {
-                buf.slice_capacity
-            } else {
-                // guess the capacity
-                DEFAULT_CAPACITY
-            }
+        if let Some(buf) = buffer_ref() {
+            buf.slice_capacity
+        } else {
+            // guess the capacity
+            DEFAULT_CAPACITY
         }
     }
 
     fn slice_stat(id: usize, query: SliceStatusQuery) -> usize {
-        unsafe {
-            if let Some(buf) = BUFFER.as_ref() {
-                match query {
-                    SliceStatusQuery::Length => buf.store[id].len(),
-                    SliceStatusQuery::Capacity => buf.store[id].capacity(),
-                }
-            } else {
-                0
+        if let Some(buf) = buffer_ref() {
+            match query {
+                SliceStatusQuery::Length => buf.store[id].len(),
+                SliceStatusQuery::Capacity => buf.store[id].capacity(),
             }
+        } else {
+            0
         }
     }
 
@@ -107,8 +108,8 @@ impl PoolManagement for BufferPool {
             return None;
         }
 
-        let result = unsafe {
-            if let Some(buf) = BUFFER.as_mut() {
+        let result = {
+            if let Some(buf) = buffer_update() {
                 match command {
                     BufOp::Reserve(forced) => buf.reserve(forced),
                     BufOp::Release(id) => {
@@ -121,11 +122,12 @@ impl PoolManagement for BufferPool {
                         None
                     },
                     BufOp::ReleaseAndExtend(vec) => {
-                        if buf.store.len() < SIZE_CAP.load(Ordering::SeqCst) {
+                        if buf.store.len() < unsafe { SIZE_CAP.load(Ordering::SeqCst) } {
                             let id = buf.store.len();
 
                             buf.store.push(vec);
                             buf.pool.push(id);
+
                             buf.reset(id);
                         }
 
@@ -142,29 +144,25 @@ impl PoolManagement for BufferPool {
     }
 
     fn reset_and_release(id: usize) {
-        unsafe {
-            if let Some(buf) = BUFFER.as_ref() {
-                buf.worker_chan
-                    .send(WorkerOp::Cleanup(id))
-                    .unwrap_or_else(|err| {
-                        eprintln!("Failed to release buffer slice: {}, err: {}", id, err);
-                    });
-            }
+        if let Some(buf) = buffer_ref() {
+            buf.worker_chan
+                .send(WorkerOp::Cleanup(id))
+                .unwrap_or_else(|err| {
+                    eprintln!("Failed to release buffer slice: {}, err: {}", id, err);
+                });
         }
     }
 
     fn get_writable(id: usize) -> Result<&'static mut Vec<u8>, ErrorKind> {
-        unsafe {
-            if let Some(buf) = BUFFER.as_mut() {
-                if buf.closing.load(Ordering::SeqCst) {
-                    return Err(ErrorKind::NotConnected);
-                }
+        if let Some(buf) = buffer_update() {
+            if buf.closing.load(Ordering::SeqCst) {
+                return Err(ErrorKind::NotConnected);
+            }
 
-                if id < buf.store.len() {
-                    return Ok(&mut buf.store[id]);
-                } else {
-                    return Err(ErrorKind::InvalidData);
-                }
+            if id < buf.store.len() {
+                return Ok(&mut buf.store[id]);
+            } else {
+                return Err(ErrorKind::InvalidData);
             }
         }
 
@@ -172,17 +170,15 @@ impl PoolManagement for BufferPool {
     }
 
     fn get_readable(id: usize) -> Result<&'static Vec<u8>, ErrorKind> {
-        unsafe {
-            if let Some(buf) = BUFFER.as_mut() {
-                if buf.closing.load(Ordering::SeqCst) {
-                    return Err(ErrorKind::NotConnected);
-                }
+        if let Some(buf) = buffer_update() {
+            if buf.closing.load(Ordering::SeqCst) {
+                return Err(ErrorKind::NotConnected);
+            }
 
-                if id < buf.store.len() {
-                    return Ok(&buf.store[id]);
-                } else {
-                    return Err(ErrorKind::InvalidData);
-                }
+            if id < buf.store.len() {
+                return Ok(&buf.store[id]);
+            } else {
+                return Err(ErrorKind::InvalidData);
             }
         }
 
@@ -190,11 +186,13 @@ impl PoolManagement for BufferPool {
     }
 
     fn reset_slice(id: usize) {
-        unsafe {
-            if let Some(buf) = BUFFER.as_mut() {
-                buf.reset(id);
-            }
+        if let Some(buf) = buffer_update() {
+            buf.reset(id);
         }
+    }
+
+    fn set_size_limit(limit: usize) {
+        unsafe { SIZE_CAP.store(limit, Ordering::SeqCst); }
     }
 }
 
@@ -287,4 +285,14 @@ impl Drop for BufferPool {
     fn drop(&mut self) {
         *self.closing.get_mut() = true;
     }
+}
+
+#[inline]
+fn buffer_ref() -> Option<&BufferPool> {
+    unsafe { BUFFER.as_ref() }
+}
+
+#[inline]
+fn buffer_update() -> Option<&mut BufferPool> {
+    unsafe { BUFFER.as_mut() }
 }

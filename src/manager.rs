@@ -131,6 +131,10 @@ impl BufferSlice {
 
     pub fn reset(&mut self) {
         BufferPool::reset_slice(self.id);
+
+        if let Some(fb) = self.fallback.as_mut() {
+            fb.iter_mut().for_each(|val| *val = 0 );
+        }
     }
 
     pub fn try_into_string(&self) -> Result<&str, ErrorKind> {
