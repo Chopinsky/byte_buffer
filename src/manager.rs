@@ -6,9 +6,10 @@ use std::sync::{Once, ONCE_INIT};
 use std::thread;
 use std::vec;
 use crate::channel::{self as channel};
-use crate::buffer::{PoolManagement, BufOp, BufferPool, SliceStatusQuery};
+use crate::buffer::{PoolManagement, BufferPool};
+use crate::utils::*;
 
-const ONCE: Once = ONCE_INIT;
+static ONCE: Once = ONCE_INIT;
 
 pub struct ByteBuffer {}
 impl ByteBuffer {
@@ -32,32 +33,54 @@ impl ByteBuffer {
     }
 
     pub fn slice() -> BufferSlice {
-        match BufferPool::manage(BufOp::Reserve(true)) {
-            Some(val) => val,
+        match BufferPool::exec(BufOp::Reserve(true)) {
+            Some(val) => BufferSlice {
+                id: val,
+                fallback: None,
+                dirty: false,
+            },
             None => BufferSlice {
                 id: 0,
                 fallback: Some(vec::from_elem(0, BufferPool::default_capacity())),
+                dirty: false,
             },
         }
     }
 
-    #[inline]
     pub fn try_slice() -> Option<BufferSlice> {
-        BufferPool::manage(BufOp::Reserve(false))
+        BufferPool::exec(BufOp::Reserve(false)).and_then(|id| {
+            Some(BufferSlice {
+                id,
+                fallback: None,
+                dirty: false,
+            })
+        })
+    }
+
+    #[inline]
+    pub fn extend(additional: usize) {
+        BufferPool::exec(BufOp::Extend(additional));
     }
 }
 
 pub struct BufferSlice {
     id: usize,
     fallback: Option<Vec<u8>>,
+    dirty: bool,
 }
 
 impl BufferSlice {
     pub(crate) fn new(id: usize, fallback: Option<Vec<u8>>) -> Self {
-        BufferSlice {id, fallback}
+        BufferSlice {
+            id,
+            fallback,
+            dirty: false,
+        }
     }
 
     pub fn as_writable(&mut self) -> &mut [u8] {
+        self.dirty = true;
+
         if let Some(ref mut vec) = self.fallback {
             return vec.as_mut_slice();
         }
@@ -76,6 +99,8 @@ impl BufferSlice {
     }
 
     pub fn as_writable_vec(&mut self) -> &mut Vec<u8> {
+        self.dirty = true;
+
         if let Some(ref mut vec) = self.fallback {
             return vec;
         }
@@ -84,7 +109,7 @@ impl BufferSlice {
             Ok(vec) => vec,
             Err(_) => {
                 self.fallback = Some(vec::from_elem(0, BufferPool::default_capacity()));
-                if let Some(ref mut vec) = self.fallback {
+                if let Some(vec) = self.fallback.as_mut() {
                     return vec;
                 }
 
@@ -130,6 +155,10 @@ impl BufferSlice {
     }
 
     pub fn reset(&mut self) {
+        if !self.dirty {
+            return;
+        }
+
         BufferPool::reset_slice(self.id);
 
         if let Some(fb) = self.fallback.as_mut() {
@@ -160,9 +189,11 @@ impl BufferSlice {
 impl Drop for BufferSlice {
     fn drop(&mut self) {
         if self.id == 0 && self.fallback.is_some() {
-            BufferPool::manage(BufOp::ReleaseAndExtend(self.fallback.take().unwrap()));
+            BufferPool::exec(
+                BufOp::ReleaseAndExtend(self.fallback.take().unwrap(), self.dirty)
+            );
         } else {
-            BufferPool::reset_and_release(self.id);
+            BufferPool::reset_and_release(self.id, self.dirty);
         }
     }
 }

@@ -36,6 +36,7 @@ use crossbeam_channel as channel;
 pub mod manager;
 mod buffer;
 mod lock;
+mod utils;
 
 pub mod prelude {
     pub use crate::manager::*;

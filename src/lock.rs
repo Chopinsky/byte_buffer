@@ -10,16 +10,10 @@ pub(crate) fn lock() -> Result<(), ErrorKind> {
 
     loop {
         unsafe {
-            match LOCK.compare_exchange(
+            if let Ok(true) = LOCK.compare_exchange(
                 false, true, Ordering::SeqCst, Ordering::SeqCst
             ) {
-                Ok(res) => if res == false {
-                    // if not locked previously, we've grabbed the lock and break the wait
-                    break;
-                },
-                Err(_) => {
-                    // locked by someone else,
-                },
+                break;
             }
         };
 

@@ -1,35 +1,17 @@
 #![allow(dead_code)]
 
 use std::io::ErrorKind;
-use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering, Once, ONCE_INIT};
+use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use std::vec;
-use crate::manager::BufferSlice;
 use crate::channel::{Sender, Receiver};
 use crate::lock::{lock, unlock};
+use crate::utils::*;
 
-const ONCE: Once = ONCE_INIT;
-const DEFAULT_GROWTH: u8 = 4;
+const DEFAULT_GROWTH: usize = 4;
 const DEFAULT_CAPACITY: usize = 512;
 
 static mut BUFFER: Option<BufferPool> = None;
 static mut SIZE_CAP: AtomicUsize = AtomicUsize::new(512);
-
-pub(crate) enum BufOp {
-    Reserve(bool),
-    Release(usize),
-    ReleaseAndExtend(Vec<u8>),
-    Extend(usize),
-}
-
-pub(crate) enum WorkerOp {
-    Cleanup(usize),
-    Shutdown,
-}
-
-pub(crate) enum SliceStatusQuery {
-    Length,
-    Capacity,
-}
 
 pub(crate) struct BufferPool {
     store: Vec<Vec<u8>>,
@@ -44,8 +26,8 @@ pub(crate) trait PoolManagement {
     fn default_capacity() -> usize;
     fn slice_stat(id: usize, query: SliceStatusQuery) -> usize;
     fn handle_work(rx: Receiver<WorkerOp>);
-    fn manage(command: BufOp) -> Option<BufferSlice>;
-    fn reset_and_release(id: usize);
+    fn exec(command: BufOp) -> Option<usize>;
+    fn reset_and_release(id: usize, dirty: bool);
     fn get_writable(id: usize) -> Result<&'static mut Vec<u8>, ErrorKind>;
     fn get_readable(id: usize) -> Result<&'static Vec<u8>, ErrorKind>;
     fn reset_slice(id: usize);
@@ -95,58 +77,70 @@ impl PoolManagement for BufferPool {
     }
 
     fn handle_work(rx: Receiver<WorkerOp>) {
-        for message in rx.recv() {
-            match message {
-                WorkerOp::Cleanup(id) => BufferPool::manage(BufOp::Release(id)),
-                WorkerOp::Shutdown => return,
+        loop {
+            match rx.recv() {
+                Ok(message) => {
+                    match message {
+                        WorkerOp::Cleanup(id, dirty) =>
+                            BufferPool::exec(BufOp::Release(id, dirty)),
+                        WorkerOp::Shutdown => return,
+                    };
+                },
+                Err(_) => return,
             };
         }
     }
 
-    fn manage(command: BufOp) -> Option<BufferSlice> {
+    fn exec(command: BufOp) -> Option<usize> {
         if lock().is_err() {
             return None;
         }
 
-        let result = {
-            if let Some(buf) = buffer_update() {
-                match command {
-                    BufOp::Reserve(forced) => buf.reserve(forced),
-                    BufOp::Release(id) => {
+        let mut result: Option<usize> = None;
+        if let Some(buf) = buffer_mut() {
+            match command {
+                BufOp::Reserve(forced) => {
+                    if let Some(id) = buf.try_reserve() {
+                        result = Some(id)
+                    } else if forced {
+                        //TODO: try extend, and if failed, generate fallback
+                        result = Some(buf.extend(DEFAULT_GROWTH));
+                    }
+                },
+                BufOp::Release(id, dirty) => {
+                    buf.release(id);
+
+                    if dirty {
                         buf.reset(id);
-                        buf.release(id);
-                        None
-                    },
-                    BufOp::Extend(count) => {
-                        buf.extend(count);
-                        None
-                    },
-                    BufOp::ReleaseAndExtend(vec) => {
-                        if buf.store.len() < unsafe { SIZE_CAP.load(Ordering::SeqCst) } {
-                            let id = buf.store.len();
+                    }
+                },
+                BufOp::Extend(count) => {
+                    //TODO: try extend, and if failed, fallback to None
+                    result = Some(buf.extend(count));
+                },
+                BufOp::ReleaseAndExtend(vec, dirty) => {
+                    if buf.store.len() < unsafe { SIZE_CAP.load(Ordering::SeqCst) } {
+                        let id = buf.store.len();
 
-                            buf.store.push(vec);
-                            buf.pool.push(id);
+                        buf.store.push(vec);
+                        buf.pool.push(id);
 
+                        if dirty {
                             buf.reset(id);
                         }
-
-                        None
                     }
                 }
-            } else {
-                None
             }
-        };
+        }
 
         unlock();
         result
     }
 
-    fn reset_and_release(id: usize) {
+    fn reset_and_release(id: usize, dirty: bool) {
         if let Some(buf) = buffer_ref() {
             buf.worker_chan
-                .send(WorkerOp::Cleanup(id))
+                .send(WorkerOp::Cleanup(id, dirty))
                 .unwrap_or_else(|err| {
                     eprintln!("Failed to release buffer slice: {}, err: {}", id, err);
                 });
@@ -154,7 +148,7 @@ impl PoolManagement for BufferPool {
     }
 
     fn get_writable(id: usize) -> Result<&'static mut Vec<u8>, ErrorKind> {
-        if let Some(buf) = buffer_update() {
+        if let Some(buf) = buffer_mut() {
             if buf.closing.load(Ordering::SeqCst) {
                 return Err(ErrorKind::NotConnected);
             }
@@ -170,7 +164,7 @@ impl PoolManagement for BufferPool {
     }
 
     fn get_readable(id: usize) -> Result<&'static Vec<u8>, ErrorKind> {
-        if let Some(buf) = buffer_update() {
+        if let Some(buf) = buffer_ref() {
             if buf.closing.load(Ordering::SeqCst) {
                 return Err(ErrorKind::NotConnected);
             }
@@ -186,7 +180,7 @@ impl PoolManagement for BufferPool {
     }
 
     fn reset_slice(id: usize) {
-        if let Some(buf) = buffer_update() {
+        if let Some(buf) = buffer_mut() {
             buf.reset(id);
         }
     }
@@ -197,7 +191,7 @@ impl PoolManagement for BufferPool {
 }
 
 trait PoolOps {
-    fn reserve(&mut self, force: bool) -> Option<BufferSlice>;
+    fn try_reserve(&mut self) -> Option<usize>;
     fn release(&mut self, id: usize);
     fn reset(&mut self, id: usize);
     fn extend(&mut self, additional: usize) -> usize;
@@ -205,22 +199,9 @@ trait PoolOps {
 }
 
 impl PoolOps for BufferPool {
-    fn reserve(&mut self, force: bool) -> Option<BufferSlice> {
-        match self.pool.pop() {
-            Some(id) => Some(BufferSlice::new(id, None)),
-            None => {
-                if force {
-
-                    //TODO: try to extend, if failed, use fallback
-
-                    Some(BufferSlice::new(
-                        self.extend(DEFAULT_GROWTH as usize), None
-                    ))
-                } else {
-                    None
-                }
-            }
-        }
+    #[inline]
+    fn try_reserve(&mut self) -> Option<usize> {
+        self.pool.pop()
     }
 
     fn release(&mut self, id: usize) {
@@ -284,15 +265,21 @@ impl PoolOps for BufferPool {
 impl Drop for BufferPool {
     fn drop(&mut self) {
         *self.closing.get_mut() = true;
+
+        self.worker_chan
+            .send(WorkerOp::Shutdown)
+            .unwrap_or_else(|err| {
+                eprintln!("Failed to close the worker thread, error code: {}", err);
+            });
     }
 }
 
 #[inline]
-fn buffer_ref() -> Option<&BufferPool> {
+fn buffer_ref() -> Option<&'static BufferPool> {
     unsafe { BUFFER.as_ref() }
 }
 
 #[inline]
-fn buffer_update() -> Option<&mut BufferPool> {
+fn buffer_mut() -> Option<&'static mut BufferPool> {
     unsafe { BUFFER.as_mut() }
 }
