@@ -46,7 +46,7 @@ impl PoolManagement for BufferPool {
                 SIZE_CAP.store(store.len(), Ordering::SeqCst);
             }
 
-            BUFFER = Some(BufferPool {
+            BUFFER.replace(BufferPool {
                 store,
                 pool,
                 slice_capacity,

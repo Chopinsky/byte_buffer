@@ -1,6 +1,6 @@
 [package]
 name = "byte_buffer"
-version = "0.1.0"
+version = "0.1.1"
 description = "A buffer-pool library aimed to provide performant and reused byte buffers for IO code"
 license = "MIT"
 authors = ["Jacob Zuo <chopinsky@live.com>"]
