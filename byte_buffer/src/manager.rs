@@ -11,7 +11,8 @@ use crate::utils::*;
 
 static ONCE: Once = ONCE_INIT;
 
-pub struct ByteBuffer {}
+pub struct ByteBuffer;
+
 impl ByteBuffer {
     pub fn init(size: usize, capacity: usize) {
         ONCE.call_once(|| {

@@ -2,6 +2,9 @@
 name = "byte_buffer"
 version = "0.1.1"
 description = "A buffer-pool library aimed to provide performant and reused byte buffers for IO code"
+readme = "README.md"
+documentation = "https://docs.rs/byte_buffer/"
+repository = "https://github.com/Chopinsky/byte_buffer.git"
 license = "MIT"
 authors = ["Jacob Zuo <chopinsky@live.com>"]
 edition = "2018"
