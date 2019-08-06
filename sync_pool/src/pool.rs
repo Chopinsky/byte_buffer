@@ -1,11 +1,10 @@
-use std::mem::MaybeUninit;
+use std::mem::{self, MaybeUninit};
 use std::ptr;
 use std::sync::atomic::{self, AtomicBool, AtomicUsize, Ordering, AtomicPtr};
 
 const POOL_SIZE: usize = 8;
-const SLOT_CAP: usize = 16;
+const SLOT_CAP: usize = 32;
 const EXPANSION_CAP: usize = 512;
-const EXPANSION_THRESHOLD: usize = 8;
 
 /// Configuration flags
 const CONFIG_ALLOW_EXPANSION: usize = 1;
@@ -20,8 +19,10 @@ struct Slot<T> {
     len: usize,
 
     /// if the slot is currently being read/write to
-    lock: AtomicBool,
+    access: AtomicBool,
 }
+
+//TODO: v2 -> only save/gave the pointer, and mem::forget the original value.
 
 impl<T: Default> Slot<T> {
     fn new(fill: bool) -> Self {
@@ -30,16 +31,20 @@ impl<T: Default> Slot<T> {
 
         // fill the placeholder if required
         if fill {
-            slice.iter_mut().for_each(|item| {
-                *item = Some(Default::default());
-            });
+            for i in 0..slice.len() {
+//                let val = Default::default();
+//                slice[i] = &val as *mut T;
+//                mem::forget(val);
+//
+                slice[i] = Default::default();
+            }
         }
 
         // done
         Slot {
             slot: slice,
             len: SLOT_CAP,
-            lock: AtomicBool::new(false),
+            access: AtomicBool::new(false),
         }
     }
 
@@ -47,13 +52,13 @@ impl<T: Default> Slot<T> {
         // be more patient if we're to return a value
         let mut count = if is_get { 4 } else { 6 };
 
-        // check the lock and wait if not available
+        // check the access and wait if not available
         while self
-            .lock
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            .access
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Acquire)
             .is_err()
         {
-            cpu_relax(2 * count);
+            cpu_relax(count);
             count -= 1;
 
             // "timeout" -- tried 4 times and still can't get the try_lock, rare case but fine, move on.
@@ -74,21 +79,20 @@ impl<T: Default> Slot<T> {
     }
 
     fn unlock(&self) {
-        self.lock.store(false, Ordering::Release);
+        self.access.store(false, Ordering::Release);
     }
 
     /// The function is safe because it's used internally, and each time it's guaranteed a try_lock has
     /// been acquired previously
     fn checkout(&mut self) -> Result<T, ()> {
         // need to loop over the slots to make sure we're getting the valid value, starting from
-        for i in (0..self.len).rev() {
-            if let Some(val) = self.slot[i].take() {
-                // update internal states
-                self.len = i;
+        let i = self.len - 1;
+        if let Some(val) = self.slot[i].take() {
+            // update internal states
+            self.len = i;
 
-                // return the value
-                return Ok(val);
-            }
+            // return the value
+            return Ok(val);
         }
 
         Err(())
@@ -98,20 +102,19 @@ impl<T: Default> Slot<T> {
     /// been acquired previously
     fn release(&mut self, mut val: T, reset: *mut ResetHandle<T>) {
         // need to loop over the slots to make sure we're getting the valid value
-        for i in self.len..SLOT_CAP {
-            if self.slot[i].is_none() {
-                // reset the struct before releasing it to the pool
-                if !reset.is_null() {
-                    unsafe { (*reset)(&mut val); }
-                }
-
-                // update internal states
-                self.slot[i].replace(val);
-                self.len = i;
-
-                // done
-                return;
+        let i = self.len;
+        if self.slot[i].is_none() {
+            // reset the struct before releasing it to the pool
+            if !reset.is_null() {
+                unsafe { (*reset)(&mut val); }
             }
+
+            // update internal states
+            self.slot[i].replace(val);
+            self.len = i;
+
+            // done
+            return;
         }
 
         // if all slots are full, no need to fallback, the `val` will be dropped here
@@ -167,6 +170,7 @@ pub struct SyncPool<T> {
     /// if we allow expansion of the pool
     configure: AtomicUsize,
 
+    /// the handle to be invoked before putting the struct back
     reset_handle: AtomicPtr<ResetHandle<T>>,
 }
 
@@ -228,14 +232,6 @@ impl<T: Default> SyncPool<T> {
 
         // make sure our guard has been returned if we want the correct visitor count
         drop(_guard);
-
-        if self.expansion_enabled()
-            && self.fault_count.fetch_add(1, Ordering::AcqRel) > EXPANSION_THRESHOLD
-            && cap < EXPANSION_CAP
-            && self.expand(1, false)
-        {
-            self.fault_count.store(0, Ordering::Release);
-        }
 
         Default::default()
     }
@@ -335,12 +331,17 @@ impl<T> Drop for SyncPool<T> {
 
 pub trait PoolState {
     fn expansion_enabled(&self) -> bool;
+    fn fault_count(&self) -> usize;
 }
 
 impl<T> PoolState for SyncPool<T> {
     fn expansion_enabled(&self) -> bool {
         let configure = self.configure.load(Ordering::SeqCst);
         configure & CONFIG_ALLOW_EXPANSION > 0
+    }
+
+    fn fault_count(&self) -> usize {
+        self.fault_count.load(Ordering::Acquire)
     }
 }
 
@@ -366,6 +367,11 @@ impl<T> PoolManager<T> for SyncPool<T> where T: Default {
             return false;
         }
 
+        // if exceeding the upper limit, quit
+        if self.slots.len() > EXPANSION_CAP {
+            return false;
+        }
+
         // raise the write barrier now, if someone has already raised the flag to indicate the
         // intention to write, let me go away.
         if self
@@ -379,11 +385,12 @@ impl<T> PoolManager<T> for SyncPool<T> where T: Default {
 
         // busy waiting ... for all visitors to leave
         let mut count: usize = 0;
-        let safe = loop {
-            match self
-                .visitor_counter
-                .0
-                .compare_exchange(1, 0, Ordering::SeqCst, Ordering::Relaxed)
+        let safe =
+            loop {
+                match self
+                    .visitor_counter
+                    .0
+                    .compare_exchange(1, 0, Ordering::SeqCst, Ordering::Relaxed)
                 {
                     Ok(_) => break true,
                     Err(_) => {
@@ -395,7 +402,7 @@ impl<T> PoolManager<T> for SyncPool<T> where T: Default {
                         }
                     }
                 }
-        };
+            };
 
         if safe {
             // update the slots by pushing `additional` slots
@@ -403,10 +410,12 @@ impl<T> PoolManager<T> for SyncPool<T> where T: Default {
                 self.slots.push(Slot::new(true));
             });
 
-            // update the internal states
-            self.visitor_counter.0.store(1, Ordering::SeqCst);
-            self.visitor_counter.1.store(false, Ordering::Release);
+            self.fault_count.store(0, Ordering::Release);
         }
+
+        // update the internal states
+        self.visitor_counter.0.store(1, Ordering::SeqCst);
+        self.visitor_counter.1.store(false, Ordering::Release);
 
         safe
     }

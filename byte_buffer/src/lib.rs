@@ -5,7 +5,7 @@
 //!
 //! To use this crate, add the crate dependency in your project's Cargo.toml file:
 //!
-//! ```
+//! ```Cargo
 //! [dependencies]
 //! byte_buffer = "0.1"
 //! ```
@@ -14,6 +14,7 @@
 //!
 //! ```
 //! extern crate byte_buffer;
+//! use std::io::{self, Read};
 //! use byte_buffer::prelude::*;
 //!
 //! fn main() {
