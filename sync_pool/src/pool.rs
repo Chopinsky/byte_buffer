@@ -1,4 +1,4 @@
-use std::mem::{self, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::atomic::{self, AtomicBool, AtomicUsize, Ordering, AtomicPtr};
 
@@ -22,8 +22,6 @@ struct Slot<T> {
     access: AtomicBool,
 }
 
-//TODO: v2 -> only save/gave the pointer, and mem::forget the original value.
-
 impl<T: Default> Slot<T> {
     fn new(fill: bool) -> Self {
         // create the placeholder
@@ -31,12 +29,8 @@ impl<T: Default> Slot<T> {
 
         // fill the placeholder if required
         if fill {
-            for i in 0..slice.len() {
-//                let val = Default::default();
-//                slice[i] = &val as *mut T;
-//                mem::forget(val);
-//
-                slice[i] = Default::default();
+            for item in slice.iter_mut() {
+                item.replace(Default::default());
             }
         }
 
@@ -48,9 +42,9 @@ impl<T: Default> Slot<T> {
         }
     }
 
-    fn try_lock(&self, is_get: bool) -> bool {
-        // be more patient if we're to return a value
-        let mut count = if is_get { 4 } else { 6 };
+    fn try_lock(&self, get: bool) -> bool {
+        // count down to lock timeout
+        let mut count = if get { 4 } else { 2 };
 
         // check the access and wait if not available
         while self
@@ -58,16 +52,15 @@ impl<T: Default> Slot<T> {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Acquire)
             .is_err()
         {
-            cpu_relax(count);
-            count -= 1;
-
-            // "timeout" -- tried 4 times and still can't get the try_lock, rare case but fine, move on.
             if count == 0 {
                 return false;
             }
+
+            cpu_relax(2 * count);
+            count -= 1;
         }
 
-        if (is_get && self.len == 0) || (!is_get && self.len == SLOT_CAP) {
+        if (get && self.len == 0) || (!get && self.len == SLOT_CAP) {
             // not actually locked
             self.unlock();
 
@@ -103,6 +96,10 @@ impl<T: Default> Slot<T> {
     fn release(&mut self, mut val: T, reset: *mut ResetHandle<T>) {
         // need to loop over the slots to make sure we're getting the valid value
         let i = self.len;
+        if i >= SLOT_CAP {
+            return;
+        }
+
         if self.slot[i].is_none() {
             // reset the struct before releasing it to the pool
             if !reset.is_null() {
@@ -111,7 +108,7 @@ impl<T: Default> Slot<T> {
 
             // update internal states
             self.slot[i].replace(val);
-            self.len = i;
+            self.len = i + 1;
 
             // done
             return;
@@ -194,17 +191,16 @@ impl<T: Default> SyncPool<T> {
 
         // start from where we're left
         let cap = self.slots.len();
-        let origin: usize = self.curr.load(Ordering::Acquire) % cap;
+        let origin: usize = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
         let mut pos = origin;
 
         loop {
             // check this slot
             let slot: &mut Slot<T> = &mut self.slots[pos];
-            let next = if pos == cap - 1 { 0 } else { pos + 1 };
 
             // try the try_lock or move on
             if !slot.try_lock(true) {
-                pos = next;
+                pos = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
 
                 // we've finished 1 loop but not finding a value to extract, quit
                 if pos == origin {
@@ -220,7 +216,7 @@ impl<T: Default> SyncPool<T> {
 
             if let Ok(val) = checkout {
                 // now we're locked, get the val and update internal states
-                self.curr.store(next, Ordering::Release);
+                self.curr.store(pos, Ordering::Release);
 
                 // done
                 return val;
@@ -242,21 +238,18 @@ impl<T: Default> SyncPool<T> {
 
         // start from where we're left
         let cap = self.slots.len();
-        let curr: usize = self.curr.load(Ordering::Acquire) % cap;
 
         // origin is 1 `Slots` off from the next "get" position
-        let origin = if curr > 0 { curr - 1 } else { 0 };
-
+        let origin = self.curr.load(Ordering::Acquire) % cap;
         let mut pos = origin;
 
         loop {
             // check this slot
             let slot: &mut Slot<T> = &mut self.slots[pos];
-            let next = if pos == 0 { cap - 1 } else { pos - 1 };
 
             // try the try_lock or move on
             if !slot.try_lock(false) {
-                pos = next;
+                pos = self.curr.fetch_sub(1, Ordering::AcqRel) % cap;;
 
                 // we've finished 1 loop but not finding a value to extract, quit
                 if pos == origin {
