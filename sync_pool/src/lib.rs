@@ -1,9 +1,10 @@
 mod pool;
+mod utils;
 
-pub use crate::pool::{SyncPool, PoolManager, PoolState};
+pub use crate::pool::{PoolManager, PoolState, SyncPool};
 
 pub mod prelude {
-    pub use crate::{SyncPool, PoolManager, PoolState};
+    pub use crate::{PoolManager, PoolState, SyncPool};
 }
 
 #[cfg(test)]

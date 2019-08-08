@@ -1,9 +1,10 @@
+use crate::utils::cpu_relax;
 use std::mem::MaybeUninit;
 use std::ptr;
-use std::sync::atomic::{self, AtomicBool, AtomicUsize, Ordering, AtomicPtr};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU16, AtomicUsize, Ordering};
 
+pub(crate) const SLOT_CAP: usize = 8;
 const POOL_SIZE: usize = 8;
-const SLOT_CAP: usize = 32;
 const EXPANSION_CAP: usize = 512;
 
 /// Configuration flags
@@ -20,18 +21,29 @@ struct Slot<T> {
 
     /// if the slot is currently being read/write to
     access: AtomicBool,
+
+    bitmap: AtomicU16,
 }
 
 impl<T: Default> Slot<T> {
     fn new(fill: bool) -> Self {
         // create the placeholder
         let mut slice: [Option<T>; SLOT_CAP] = unsafe { MaybeUninit::zeroed().assume_init() };
+        let mut bitmap: u16 = 0;
 
         // fill the placeholder if required
         if fill {
             for item in slice.iter_mut() {
                 item.replace(Default::default());
             }
+
+            // fill the slots
+            for i in 0..(SLOT_CAP - 1) {
+                bitmap |= 1 << (2 * i as u16 + 1);
+            }
+
+            // update the last slot
+            bitmap |= 1;
         }
 
         // done
@@ -39,6 +51,7 @@ impl<T: Default> Slot<T> {
             slot: slice,
             len: SLOT_CAP,
             access: AtomicBool::new(false),
+            bitmap: AtomicU16::new(bitmap),
         }
     }
 
@@ -80,15 +93,15 @@ impl<T: Default> Slot<T> {
     fn checkout(&mut self) -> Result<T, ()> {
         // need to loop over the slots to make sure we're getting the valid value, starting from
         let i = self.len - 1;
-        if let Some(val) = self.slot[i].take() {
-            // update internal states
-            self.len = i;
-
-            // return the value
-            return Ok(val);
+        if self.slot[i].is_none() {
+            return Err(());
         }
 
-        Err(())
+        // update internal states
+        self.len = i;
+
+        // return the value
+        return Ok(self.swap_out(i));
     }
 
     /// The function is safe because it's used internally, and each time it's guaranteed a try_lock has
@@ -103,11 +116,15 @@ impl<T: Default> Slot<T> {
         if self.slot[i].is_none() {
             // reset the struct before releasing it to the pool
             if !reset.is_null() {
-                unsafe { (*reset)(&mut val); }
+                unsafe {
+                    (*reset)(&mut val);
+                }
             }
 
+            // move the value in
+            self.swap_in(i, val);
+
             // update internal states
-            self.slot[i].replace(val);
             self.len = i + 1;
 
             // done
@@ -116,6 +133,25 @@ impl<T: Default> Slot<T> {
 
         // if all slots are full, no need to fallback, the `val` will be dropped here
         drop(val);
+    }
+
+    fn swap_in(&mut self, index: usize, content: T) {
+        let src = &mut self.slot[index] as *mut Option<T>;
+        unsafe { src.write(Some(content)); }
+    }
+
+    fn swap_out(&mut self, index: usize) -> T {
+        let src = &mut self.slot[index] as *mut Option<T>;
+
+        unsafe {
+            // save off the old values
+            let val = ptr::read(src).unwrap_or_default();
+
+            // swap values
+            src.write(None);
+
+            val
+        }
     }
 }
 
@@ -289,9 +325,9 @@ impl<T: Default> SyncPool<T> {
     fn update_config(&mut self, mask: usize, target: bool) {
         let mut curr = self.configure.load(Ordering::SeqCst);
 
-        while let Err(old) = self
-            .configure
-            .compare_exchange(curr, curr ^ mask, Ordering::SeqCst, Ordering::Relaxed)
+        while let Err(old) =
+            self.configure
+                .compare_exchange(curr, curr ^ mask, Ordering::SeqCst, Ordering::Relaxed)
         {
             if !((old & mask > 0) ^ target) {
                 // the configure already matches, we're done
@@ -303,7 +339,10 @@ impl<T: Default> SyncPool<T> {
     }
 }
 
-impl<T> Default for SyncPool<T> where T: Default {
+impl<T> Default for SyncPool<T>
+where
+    T: Default,
+{
     fn default() -> Self {
         SyncPool::make_pool(POOL_SIZE)
     }
@@ -315,9 +354,7 @@ impl<T> Drop for SyncPool<T> {
 
         unsafe {
             // now drop the reset handle if it's not null
-            Box::from_raw(
-                self.reset_handle.swap(ptr::null_mut(), Ordering::SeqCst)
-            );
+            Box::from_raw(self.reset_handle.swap(ptr::null_mut(), Ordering::SeqCst));
         }
     }
 }
@@ -344,7 +381,10 @@ pub trait PoolManager<T> {
     fn reset_handle(&mut self, handle: ResetHandle<T>);
 }
 
-impl<T> PoolManager<T> for SyncPool<T> where T: Default {
+impl<T> PoolManager<T> for SyncPool<T>
+where
+    T: Default,
+{
     fn allow_expansion(&mut self, allow: bool) {
         if !(self.expansion_enabled() ^ allow) {
             // not flipping the configuration, return
@@ -378,24 +418,23 @@ impl<T> PoolManager<T> for SyncPool<T> where T: Default {
 
         // busy waiting ... for all visitors to leave
         let mut count: usize = 0;
-        let safe =
-            loop {
-                match self
-                    .visitor_counter
-                    .0
-                    .compare_exchange(1, 0, Ordering::SeqCst, Ordering::Relaxed)
-                {
-                    Ok(_) => break true,
-                    Err(_) => {
-                        cpu_relax(2);
-                        count += 1;
+        let safe = loop {
+            match self
+                .visitor_counter
+                .0
+                .compare_exchange(1, 0, Ordering::SeqCst, Ordering::Relaxed)
+            {
+                Ok(_) => break true,
+                Err(_) => {
+                    cpu_relax(2);
+                    count += 1;
 
-                        if count > 8 && !block {
-                            break false;
-                        }
+                    if count > 8 && !block {
+                        break false;
                     }
                 }
-            };
+            }
+        };
 
         if safe {
             // update the slots by pushing `additional` slots
@@ -415,13 +454,7 @@ impl<T> PoolManager<T> for SyncPool<T> where T: Default {
 
     fn reset_handle(&mut self, handle: ResetHandle<T>) {
         let h = Box::new(handle);
-        self.reset_handle.swap(Box::into_raw(h) as *mut ResetHandle<T>, Ordering::Release);
-    }
-}
-
-#[inline(always)]
-fn cpu_relax(count: usize) {
-    for _ in 0..(1 << count) {
-        atomic::spin_loop_hint()
+        self.reset_handle
+            .swap(Box::into_raw(h) as *mut ResetHandle<T>, Ordering::Release);
     }
 }

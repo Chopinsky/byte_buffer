@@ -2,14 +2,15 @@
 
 extern crate sync_pool;
 
-use std::time::{Duration, Instant};
-use std::thread;
 use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 use sync_pool::prelude::*;
 
-const ARR_CAP: usize = 4096;
-const TEST_SIZE: usize = 4096;
+const ARR_CAP: usize = 1024;
+const TEST_SIZE: usize = 64;
 const SLEEP: u64 = 64;
+const DENOMINATOR: usize = 1;
 
 static mut POOL: Option<SyncPool<Buffer>> = None;
 
@@ -24,15 +25,17 @@ impl Buffer {
 
 impl Default for Buffer {
     fn default() -> Self {
-//        Buffer(Box::new([0u8; ARR_CAP]))
-        Buffer([0u8; ARR_CAP])
+        let mut base = Buffer([0u8; ARR_CAP]); // Buffer(Box::new([0u8; ARR_CAP]))
+        base.0[42] = 42;
+
+        base
     }
 }
 
 fn main() {
     pool_setup();
 
-    let trials = 4;
+    let trials = 64;
     let mut sum = 0;
 
     for i in 0..trials {
@@ -48,7 +51,10 @@ fn main() {
         println!(">>> Trial: {}; Advance: {} us <<<", i, res);
     }
 
-    println!("\nAverage: {} ms\n", (sum as f64)/(trials as f64)/1000f64);
+    println!(
+        "\nAverage: {} ms\n",
+        (sum as f64) / (trials as f64) / 1000f64
+    );
 }
 
 fn native() -> u128 {
@@ -59,7 +65,7 @@ fn native() -> u128 {
 
     let send_one = thread::spawn(move || {
         for i in 0..TEST_SIZE {
-            if i % 16 == 0 {
+            if i % DENOMINATOR == 0 {
                 thread::sleep(Duration::from_nanos(SLEEP));
             }
 
@@ -69,12 +75,12 @@ fn native() -> u128 {
             tx_clone.send(arr).unwrap_or_default();
         }
 
-//        println!("Child thread oneA done...");
+        //        println!("Child thread oneA done...");
     });
 
     let send_two = thread::spawn(move || {
         for i in 0..TEST_SIZE {
-            if i % 16 == 0 {
+            if i % DENOMINATOR == 0 {
                 thread::sleep(Duration::from_nanos(SLEEP));
             }
 
@@ -84,7 +90,7 @@ fn native() -> u128 {
             tx.send(arr).unwrap_or_default();
         }
 
-//        println!("Child thread oneB done...");
+        //        println!("Child thread oneB done...");
     });
 
     let recv_one = thread::spawn(move || {
@@ -94,20 +100,20 @@ fn native() -> u128 {
             assert_eq!(arr.len(), ARR_CAP);
         }
 
-//        println!("Child thread two done...");
+        //        println!("Child thread two done...");
     });
 
     for i in 0..TEST_SIZE {
         // sleep a bit to create some concurrent actions
-        if i % 16 == 1 {
-            thread::sleep(Duration::from_nanos(128));
+        if i % DENOMINATOR == 1 {
+            thread::sleep(Duration::from_nanos(SLEEP));
         }
 
         let arr: Buffer = Default::default();
         assert_eq!(arr.len(), ARR_CAP);
     }
 
-//    println!("Main thread done...");
+    //    println!("Main thread done...");
 
     send_one.join().unwrap_or_default();
     send_two.join().unwrap_or_default();
@@ -119,7 +125,7 @@ fn native() -> u128 {
 fn pool_setup() {
     unsafe {
         let mut pool: SyncPool<Buffer> = SyncPool::with_size(64);
-//        pool.reset_handle(cleaner);
+        //        pool.reset_handle(cleaner);
 
         /*
             // Alternatively, use an anonymous function for the same purpose. Closure can't be used as
@@ -145,32 +151,34 @@ fn pool() -> u128 {
 
     let send_one = thread::spawn(move || {
         for i in 0..TEST_SIZE {
-            if i % 16 == 0 {
+            if i % DENOMINATOR == 0 {
                 thread::sleep(Duration::from_nanos(SLEEP));
             }
 
             let arr = unsafe { POOL.as_mut().unwrap().get() };
             assert_eq!(arr.len(), ARR_CAP);
+            assert_eq!(arr.0[42], 42);
 
             tx_clone.try_send(arr).unwrap_or_default();
         }
 
-//        println!("Child thread one done...");
+        //        println!("Child thread one done...");
     });
 
     let send_two = thread::spawn(move || {
         for i in 0..TEST_SIZE {
-            if i % 16 == 0 {
+            if i % DENOMINATOR == 0 {
                 thread::sleep(Duration::from_nanos(SLEEP));
             }
 
             let arr = unsafe { POOL.as_mut().unwrap().get() };
             assert_eq!(arr.len(), ARR_CAP);
+            assert_eq!(arr.0[42], 42);
 
             tx.try_send(arr).unwrap_or_default();
         }
 
-//        println!("Child thread one done...");
+        //        println!("Child thread one done...");
     });
 
     let recv_one = thread::spawn(move || {
@@ -178,26 +186,29 @@ fn pool() -> u128 {
 
         while let Ok(arr) = rx.recv() {
             assert_eq!(arr.len(), ARR_CAP);
-            unsafe { POOL.as_mut().unwrap().put(arr); }
+            unsafe {
+                POOL.as_mut().unwrap().put(arr);
+            }
         }
 
-//        println!("Child thread two done...");
+        //        println!("Child thread two done...");
     });
 
     for i in 0..TEST_SIZE {
         // sleep a bit to create some concurrent actions
-        if i % 16 == 1 {
+        if i % DENOMINATOR == 1 {
             thread::sleep(Duration::from_nanos(SLEEP));
         }
 
         let arr = unsafe { POOL.as_mut().unwrap().get() };
         assert_eq!(arr.len(), ARR_CAP);
+        assert_eq!(arr.0[42], 42);
 
         unsafe { POOL.as_mut().unwrap().put(arr) };
     }
 
-//    println!("Main thread done...");
-//    println!("Fault count: {}", unsafe{ POOL.as_mut().unwrap().fault_count() });
+    //    println!("Main thread done...");
+    //    println!("Fault count: {}", unsafe{ POOL.as_mut().unwrap().fault_count() });
 
     send_one.join().unwrap_or_default();
     send_two.join().unwrap_or_default();
@@ -211,5 +222,5 @@ fn cleaner(slice: &mut Buffer) {
         slice.0[i] = 0;
     }
 
-//    println!("Byte slice cleared...");
+    //    println!("Byte slice cleared...");
 }
