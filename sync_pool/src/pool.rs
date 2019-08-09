@@ -1,4 +1,7 @@
-use crate::utils::cpu_relax;
+#![allow(unused)]
+
+use crate::utils::{cpu_relax, enter, exit};
+use std::fmt::Error;
 use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU16, AtomicUsize, Ordering};
@@ -21,8 +24,6 @@ struct Slot<T> {
 
     /// if the slot is currently being read/write to
     access: AtomicBool,
-
-    bitmap: AtomicU16,
 }
 
 impl<T: Default> Slot<T> {
@@ -51,7 +52,6 @@ impl<T: Default> Slot<T> {
             slot: slice,
             len: SLOT_CAP,
             access: AtomicBool::new(false),
-            bitmap: AtomicU16::new(bitmap),
         }
     }
 
@@ -101,7 +101,7 @@ impl<T: Default> Slot<T> {
         self.len = i;
 
         // return the value
-        return Ok(self.swap_out(i));
+        Ok(self.swap_out(i))
     }
 
     /// The function is safe because it's used internally, and each time it's guaranteed a try_lock has
@@ -137,7 +137,170 @@ impl<T: Default> Slot<T> {
 
     fn swap_in(&mut self, index: usize, content: T) {
         let src = &mut self.slot[index] as *mut Option<T>;
-        unsafe { src.write(Some(content)); }
+        unsafe {
+            src.write(Some(content));
+        }
+    }
+
+    fn swap_out(&mut self, index: usize) -> T {
+        let src = &mut self.slot[index] as *mut Option<T>;
+
+        unsafe {
+            // save off the old values
+            let val = ptr::read(src).unwrap_or_default();
+
+            // swap values
+            src.write(None);
+
+            val
+        }
+    }
+}
+
+struct Slot2<T> {
+    /// the actual data store
+    slot: [Option<T>; SLOT_CAP],
+
+    /// the current ready-to-use slot index, always offset by 1 to the actual index
+    len: AtomicUsize,
+
+    bitmap: AtomicU16,
+}
+
+impl<T: Default> Slot2<T> {
+    fn new(fill: bool) -> Self {
+        // create the placeholder
+        let mut slice: [Option<T>; SLOT_CAP] = unsafe { MaybeUninit::zeroed().assume_init() };
+        let mut bitmap: u16 = 0;
+
+        // fill the placeholder if required
+        if fill {
+            // fill the slots and update the bitmap
+            for (i, item) in slice.iter_mut().enumerate() {
+                item.replace(Default::default());
+                bitmap |= 1 << (2 * i as u16);
+            }
+        }
+
+        // done
+        Slot2 {
+            slot: slice,
+            len: AtomicUsize::new(SLOT_CAP),
+            bitmap: AtomicU16::new(bitmap),
+        }
+    }
+
+    fn access(&self, get: bool) -> Result<usize, ()> {
+        // quick rejection if the condition won't match
+        let curr_len = self.len.load(Ordering::SeqCst);
+        if (get && curr_len == 0) || (!get && curr_len == SLOT_CAP) {
+            return Err(());
+        }
+
+        // pre-checkout, make sure the len is in post-action state so it can reject future attempts
+        // if it's unlikely to succeed in this slot.
+        let mut trials = if get {
+            self.len.fetch_add(1, Ordering::AcqRel);
+            4
+        } else {
+            self.len.fetch_sub(1, Ordering::AcqRel);
+            2
+        };
+
+        let mut start = self.bitmap.load(Ordering::Acquire);
+        let (mut target, mut pos) = match enter(start, get) {
+            Ok(result) => (result.0, result.1),
+            Err(()) => return self.access_failure(get),
+        };
+
+        // main loop to try to update the bitmap
+        while let Err(next) =
+            self.bitmap
+                .compare_exchange(start, target, Ordering::Acquire, Ordering::Acquire)
+        {
+            // timeout, try next slot
+            if trials == 0 {
+                return self.access_failure(get);
+            }
+
+            trials -= 1;
+            start = next;
+
+            match enter(start, get) {
+                Ok(result) => {
+                    target = result.0;
+                    pos = result.1;
+                }
+                Err(()) => self.access_failure(get),
+            };
+        }
+
+        Ok(pos as usize)
+    }
+
+    fn leave(&self, pos: usize) {
+        let pad_pos = 2 * pos as u16;
+        if self.bitmap.load(Ordering::Acquire) & (0b10 << pad_pos) == 0 {
+            // bit already marked as free-to-use
+            return;
+        }
+
+        self.bitmap.fetch_xor(0b11 << pad_pos, Ordering::SeqCst);
+    }
+
+    #[inline]
+    fn access_failure(&self, get: bool) -> Result<usize, ()> {
+        if get {
+            self.len.fetch_sub(1, Ordering::AcqRel);
+        } else {
+            self.len.fetch_add(1, Ordering::AcqRel);
+        }
+
+        Err(())
+    }
+
+    /// The function is safe because it's used internally, and each time it's guaranteed a try_lock has
+    /// been acquired previously
+    fn checkout(&mut self, pos: usize) -> Result<T, ()> {
+        // check if it's a valid position to swap out the value
+        if self.slot[pos].is_none() {
+            return Err(());
+        }
+
+        // return the value
+        Ok(self.swap_out(pos))
+    }
+
+    /// The function is safe because it's used internally, and each time it's guaranteed a try_lock has
+    /// been acquired previously
+    fn release(&mut self, pos: usize, mut val: T, reset: *mut ResetHandle<T>) {
+        // need to loop over the slots to make sure we're getting the valid value
+        if pos >= SLOT_CAP {
+            return;
+        }
+
+        if self.slot[pos].is_none() {
+            // reset the struct before releasing it to the pool
+            if !reset.is_null() {
+                unsafe { (*reset)(&mut val); }
+            }
+
+            // move the value in
+            self.swap_in(pos, val);
+
+            // done
+            return;
+        }
+
+        // if all slots are full, no need to fallback, the `val` will be dropped here
+        drop(val);
+    }
+
+    fn swap_in(&mut self, index: usize, content: T) {
+        let src = &mut self.slot[index] as *mut Option<T>;
+        unsafe {
+            src.write(Some(content));
+        }
     }
 
     fn swap_out(&mut self, index: usize) -> T {
