@@ -6,6 +6,7 @@ use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU16, AtomicUsize, Ordering};
 
+/// Constants
 pub(crate) const SLOT_CAP: usize = 8;
 const POOL_SIZE: usize = 8;
 const EXPANSION_CAP: usize = 512;
@@ -173,9 +174,8 @@ impl<T: Default> Slot2<T> {
         let mut slice: [Option<T>; SLOT_CAP] = unsafe { MaybeUninit::zeroed().assume_init() };
         let mut bitmap: u16 = 0;
 
-        // fill the placeholder if required
+        // fill the slots and update the bitmap
         if fill {
-            // fill the slots and update the bitmap
             for (i, item) in slice.iter_mut().enumerate() {
                 item.replace(Default::default());
                 bitmap |= 1 << (2 * i as u16);
@@ -231,7 +231,7 @@ impl<T: Default> Slot2<T> {
                     target = result.0;
                     pos = result.1;
                 }
-                Err(()) => self.access_failure(get),
+                Err(()) => return self.access_failure(get),
             };
         }
 
@@ -250,6 +250,8 @@ impl<T: Default> Slot2<T> {
 
     #[inline]
     fn access_failure(&self, get: bool) -> Result<usize, ()> {
+//        println!("No luck with {} ...", if get { "get" } else { "put" });
+
         if get {
             self.len.fetch_sub(1, Ordering::AcqRel);
         } else {
@@ -346,7 +348,7 @@ impl<'a> Drop for VisitorGuard<'a> {
 
 pub struct SyncPool<T> {
     /// The slots storage
-    slots: Vec<Slot<T>>,
+    slots: Vec<Slot2<T>>,
 
     /// the next channel to try
     curr: AtomicUsize,
@@ -391,38 +393,57 @@ impl<T: Default> SyncPool<T> {
         // start from where we're left
         let cap = self.slots.len();
         let origin: usize = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
+
         let mut pos = origin;
+        let mut trials = cap / 2;
 
         loop {
             // check this slot
-            let slot: &mut Slot<T> = &mut self.slots[pos];
+            let slot = &mut self.slots[pos];
 
             // try the try_lock or move on
-            if !slot.try_lock(true) {
-                pos = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
+            if let Ok(i) = slot.access(true) {
+                // try to checkout one slot
+                let checkout = slot.checkout(i);
+                slot.leave(i);
 
-                // we've finished 1 loop but not finding a value to extract, quit
-                if pos == origin {
-                    break;
+                if let Ok(val) = checkout {
+                    // now we're locked, get the val and update internal states
+                    self.curr.store(pos, Ordering::Release);
+
+                    // done
+                    return val;
                 }
 
-                continue;
+                // failed to checkout, break and let the remainder logic to handle the rest
+                break;
             }
 
-            // try to checkout one slot
-            let checkout = slot.checkout();
-            slot.unlock();
+/*            if slot.try_lock(true) {
+                // try to checkout one slot
+                let checkout = slot.checkout();
+                slot.unlock();
 
-            if let Ok(val) = checkout {
-                // now we're locked, get the val and update internal states
-                self.curr.store(pos, Ordering::Release);
+                if let Ok(val) = checkout {
+                    // now we're locked, get the val and update internal states
+                    self.curr.store(pos, Ordering::Release);
 
-                // done
-                return val;
+                    // done
+                    return val;
+                }
+
+                // failed to checkout, break and let the remainder logic to handle the rest
+                break;
+            }*/
+
+            // update to the next position now.
+            pos = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
+            trials -= 1;
+
+            // we've finished 1 loop but not finding a value to extract, quit
+            if trials == 0 || pos == origin {
+                break;
             }
-
-            // failed to checkout, break and let the remainder logic to handle the rest
-            break;
         }
 
         // make sure our guard has been returned if we want the correct visitor count
@@ -437,33 +458,46 @@ impl<T: Default> SyncPool<T> {
 
         // start from where we're left
         let cap = self.slots.len();
+        let origin: usize = self.curr.load(Ordering::Acquire) % cap;
 
-        // origin is 1 `Slots` off from the next "get" position
-        let origin = self.curr.load(Ordering::Acquire) % cap;
         let mut pos = origin;
+        let mut trials = cap / 2;
 
         loop {
             // check this slot
-            let slot: &mut Slot<T> = &mut self.slots[pos];
+            let slot = &mut self.slots[pos];
 
             // try the try_lock or move on
-            if !slot.try_lock(false) {
-                pos = self.curr.fetch_sub(1, Ordering::AcqRel) % cap;;
+            if let Ok(i) = slot.access(false) {
+                // now we're locked, get the val and update internal states
+                self.curr.store(pos, Ordering::Release);
 
-                // we've finished 1 loop but not finding a value to extract, quit
-                if pos == origin {
-                    break;
-                }
+                // put the value back and reset
+                slot.release(i, val, self.reset_handle.load(Ordering::Acquire));
+                slot.leave(i);
 
-                continue;
+                return;
             }
 
-            // now we're locked, get the val and update internal states
-            self.curr.store(pos, Ordering::Release);
-            slot.release(val, self.reset_handle.load(Ordering::Acquire));
-            slot.unlock();
+/*            if slot.try_lock(false) {
+                // now we're locked, get the val and update internal states
+                self.curr.store(pos, Ordering::Release);
 
-            return;
+                // put the value back into the slot
+                slot.release(val, self.reset_handle.load(Ordering::Acquire));
+                slot.unlock();
+
+                return;
+            }*/
+
+            // update states
+            pos = self.curr.fetch_sub(1, Ordering::AcqRel) % cap;
+            trials -= 1;
+
+            // we've finished 1 loop but not finding a value to extract, quit
+            if trials == 0 || pos == origin {
+                break;
+            }
         }
     }
 
@@ -472,7 +506,7 @@ impl<T: Default> SyncPool<T> {
 
         (0..size).for_each(|_| {
             // add the slice back to the vec container
-            s.push(Slot::new(true));
+            s.push(Slot2::new(true));
         });
 
         SyncPool {
@@ -602,7 +636,7 @@ where
         if safe {
             // update the slots by pushing `additional` slots
             (0..additional).for_each(|_| {
-                self.slots.push(Slot::new(true));
+                self.slots.push(Slot2::new(true));
             });
 
             self.fault_count.store(0, Ordering::Release);

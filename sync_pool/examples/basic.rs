@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use sync_pool::prelude::*;
 
 const ARR_CAP: usize = 1024;
-const TEST_SIZE: usize = 64;
+const TEST_SIZE: usize = 128;
 const SLEEP: u64 = 64;
 const DENOMINATOR: usize = 1;
 
@@ -124,7 +124,7 @@ fn native() -> u128 {
 
 fn pool_setup() {
     unsafe {
-        let mut pool: SyncPool<Buffer> = SyncPool::with_size(64);
+        let mut pool: SyncPool<Buffer> = SyncPool::with_size(128);
         //        pool.reset_handle(cleaner);
 
         /*
