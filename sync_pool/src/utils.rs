@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use crate::pool::SLOT_CAP;
+use crate::bucket::SLOT_CAP;
 use std::sync::atomic;
 
 const GET_MASK: u16 = 0b1010_1010_1010_1010;

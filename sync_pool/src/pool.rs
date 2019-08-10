@@ -1,324 +1,17 @@
 #![allow(unused)]
 
 use crate::utils::{cpu_relax, enter, exit};
+use crate::bucket::*;
 use std::fmt::Error;
 use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU16, AtomicUsize, Ordering};
 
-/// Constants
-pub(crate) const SLOT_CAP: usize = 8;
 const POOL_SIZE: usize = 8;
 const EXPANSION_CAP: usize = 512;
 
 /// Configuration flags
 const CONFIG_ALLOW_EXPANSION: usize = 1;
-
-type ResetHandle<T> = fn(&mut T);
-
-struct Slot<T> {
-    /// the actual data store
-    slot: [Option<T>; SLOT_CAP],
-
-    /// the current ready-to-use slot index, always offset by 1 to the actual index
-    len: usize,
-
-    /// if the slot is currently being read/write to
-    access: AtomicBool,
-}
-
-impl<T: Default> Slot<T> {
-    fn new(fill: bool) -> Self {
-        // create the placeholder
-        let mut slice: [Option<T>; SLOT_CAP] = unsafe { MaybeUninit::zeroed().assume_init() };
-        let mut bitmap: u16 = 0;
-
-        // fill the placeholder if required
-        if fill {
-            for item in slice.iter_mut() {
-                item.replace(Default::default());
-            }
-
-            // fill the slots
-            for i in 0..(SLOT_CAP - 1) {
-                bitmap |= 1 << (2 * i as u16 + 1);
-            }
-
-            // update the last slot
-            bitmap |= 1;
-        }
-
-        // done
-        Slot {
-            slot: slice,
-            len: SLOT_CAP,
-            access: AtomicBool::new(false),
-        }
-    }
-
-    fn try_lock(&self, get: bool) -> bool {
-        // count down to lock timeout
-        let mut count = if get { 4 } else { 2 };
-
-        // check the access and wait if not available
-        while self
-            .access
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Acquire)
-            .is_err()
-        {
-            if count == 0 {
-                return false;
-            }
-
-            cpu_relax(2 * count);
-            count -= 1;
-        }
-
-        if (get && self.len == 0) || (!get && self.len == SLOT_CAP) {
-            // not actually locked
-            self.unlock();
-
-            // read but empty, or write but full, all fail
-            return false;
-        }
-
-        true
-    }
-
-    fn unlock(&self) {
-        self.access.store(false, Ordering::Release);
-    }
-
-    /// The function is safe because it's used internally, and each time it's guaranteed a try_lock has
-    /// been acquired previously
-    fn checkout(&mut self) -> Result<T, ()> {
-        // need to loop over the slots to make sure we're getting the valid value, starting from
-        let i = self.len - 1;
-        if self.slot[i].is_none() {
-            return Err(());
-        }
-
-        // update internal states
-        self.len = i;
-
-        // return the value
-        Ok(self.swap_out(i))
-    }
-
-    /// The function is safe because it's used internally, and each time it's guaranteed a try_lock has
-    /// been acquired previously
-    fn release(&mut self, mut val: T, reset: *mut ResetHandle<T>) {
-        // need to loop over the slots to make sure we're getting the valid value
-        let i = self.len;
-        if i >= SLOT_CAP {
-            return;
-        }
-
-        if self.slot[i].is_none() {
-            // reset the struct before releasing it to the pool
-            if !reset.is_null() {
-                unsafe {
-                    (*reset)(&mut val);
-                }
-            }
-
-            // move the value in
-            self.swap_in(i, val);
-
-            // update internal states
-            self.len = i + 1;
-
-            // done
-            return;
-        }
-
-        // if all slots are full, no need to fallback, the `val` will be dropped here
-        drop(val);
-    }
-
-    fn swap_in(&mut self, index: usize, content: T) {
-        let src = &mut self.slot[index] as *mut Option<T>;
-        unsafe {
-            src.write(Some(content));
-        }
-    }
-
-    fn swap_out(&mut self, index: usize) -> T {
-        let src = &mut self.slot[index] as *mut Option<T>;
-
-        unsafe {
-            // save off the old values
-            let val = ptr::read(src).unwrap_or_default();
-
-            // swap values
-            src.write(None);
-
-            val
-        }
-    }
-}
-
-struct Slot2<T> {
-    /// the actual data store
-    slot: [Option<T>; SLOT_CAP],
-
-    /// the current ready-to-use slot index, always offset by 1 to the actual index
-    len: AtomicUsize,
-
-    bitmap: AtomicU16,
-}
-
-impl<T: Default> Slot2<T> {
-    fn new(fill: bool) -> Self {
-        // create the placeholder
-        let mut slice: [Option<T>; SLOT_CAP] = unsafe { MaybeUninit::zeroed().assume_init() };
-        let mut bitmap: u16 = 0;
-
-        // fill the slots and update the bitmap
-        if fill {
-            for (i, item) in slice.iter_mut().enumerate() {
-                item.replace(Default::default());
-                bitmap |= 1 << (2 * i as u16);
-            }
-        }
-
-        // done
-        Slot2 {
-            slot: slice,
-            len: AtomicUsize::new(SLOT_CAP),
-            bitmap: AtomicU16::new(bitmap),
-        }
-    }
-
-    fn access(&self, get: bool) -> Result<usize, ()> {
-        // quick rejection if the condition won't match
-        let curr_len = self.len.load(Ordering::SeqCst);
-        if (get && curr_len == 0) || (!get && curr_len == SLOT_CAP) {
-            return Err(());
-        }
-
-        // pre-checkout, make sure the len is in post-action state so it can reject future attempts
-        // if it's unlikely to succeed in this slot.
-        let mut trials = if get {
-            self.len.fetch_add(1, Ordering::AcqRel);
-            4
-        } else {
-            self.len.fetch_sub(1, Ordering::AcqRel);
-            2
-        };
-
-        let mut start = self.bitmap.load(Ordering::Acquire);
-        let (mut target, mut pos) = match enter(start, get) {
-            Ok(result) => (result.0, result.1),
-            Err(()) => return self.access_failure(get),
-        };
-
-        // main loop to try to update the bitmap
-        while let Err(next) =
-            self.bitmap
-                .compare_exchange(start, target, Ordering::Acquire, Ordering::Acquire)
-        {
-            // timeout, try next slot
-            if trials == 0 {
-                return self.access_failure(get);
-            }
-
-            trials -= 1;
-            start = next;
-
-            match enter(start, get) {
-                Ok(result) => {
-                    target = result.0;
-                    pos = result.1;
-                }
-                Err(()) => return self.access_failure(get),
-            };
-        }
-
-        Ok(pos as usize)
-    }
-
-    fn leave(&self, pos: usize) {
-        let pad_pos = 2 * pos as u16;
-        if self.bitmap.load(Ordering::Acquire) & (0b10 << pad_pos) == 0 {
-            // bit already marked as free-to-use
-            return;
-        }
-
-        self.bitmap.fetch_xor(0b11 << pad_pos, Ordering::SeqCst);
-    }
-
-    #[inline]
-    fn access_failure(&self, get: bool) -> Result<usize, ()> {
-//        println!("No luck with {} ...", if get { "get" } else { "put" });
-
-        if get {
-            self.len.fetch_sub(1, Ordering::AcqRel);
-        } else {
-            self.len.fetch_add(1, Ordering::AcqRel);
-        }
-
-        Err(())
-    }
-
-    /// The function is safe because it's used internally, and each time it's guaranteed a try_lock has
-    /// been acquired previously
-    fn checkout(&mut self, pos: usize) -> Result<T, ()> {
-        // check if it's a valid position to swap out the value
-        if self.slot[pos].is_none() {
-            return Err(());
-        }
-
-        // return the value
-        Ok(self.swap_out(pos))
-    }
-
-    /// The function is safe because it's used internally, and each time it's guaranteed a try_lock has
-    /// been acquired previously
-    fn release(&mut self, pos: usize, mut val: T, reset: *mut ResetHandle<T>) {
-        // need to loop over the slots to make sure we're getting the valid value
-        if pos >= SLOT_CAP {
-            return;
-        }
-
-        if self.slot[pos].is_none() {
-            // reset the struct before releasing it to the pool
-            if !reset.is_null() {
-                unsafe { (*reset)(&mut val); }
-            }
-
-            // move the value in
-            self.swap_in(pos, val);
-
-            // done
-            return;
-        }
-
-        // if all slots are full, no need to fallback, the `val` will be dropped here
-        drop(val);
-    }
-
-    fn swap_in(&mut self, index: usize, content: T) {
-        let src = &mut self.slot[index] as *mut Option<T>;
-        unsafe {
-            src.write(Some(content));
-        }
-    }
-
-    fn swap_out(&mut self, index: usize) -> T {
-        let src = &mut self.slot[index] as *mut Option<T>;
-
-        unsafe {
-            // save off the old values
-            let val = ptr::read(src).unwrap_or_default();
-
-            // swap values
-            src.write(None);
-
-            val
-        }
-    }
-}
 
 struct VisitorGuard<'a>(&'a AtomicUsize);
 
@@ -348,7 +41,7 @@ impl<'a> Drop for VisitorGuard<'a> {
 
 pub struct SyncPool<T> {
     /// The slots storage
-    slots: Vec<Slot2<T>>,
+    slots: Vec<Bucket2<T>>,
 
     /// the next channel to try
     curr: AtomicUsize,
@@ -401,11 +94,18 @@ impl<T: Default> SyncPool<T> {
             // check this slot
             let slot = &mut self.slots[pos];
 
-            // try the try_lock or move on
+            // try the access or move on
             if let Ok(i) = slot.access(true) {
                 // try to checkout one slot
                 let checkout = slot.checkout(i);
                 slot.leave(i);
+
+/*
+            if slot.access(true) {
+                // try to checkout one slot
+                let checkout = slot.checkout();
+                slot.leave();
+*/
 
                 if let Ok(val) = checkout {
                     // now we're locked, get the val and update internal states
@@ -418,23 +118,6 @@ impl<T: Default> SyncPool<T> {
                 // failed to checkout, break and let the remainder logic to handle the rest
                 break;
             }
-
-/*            if slot.try_lock(true) {
-                // try to checkout one slot
-                let checkout = slot.checkout();
-                slot.unlock();
-
-                if let Ok(val) = checkout {
-                    // now we're locked, get the val and update internal states
-                    self.curr.store(pos, Ordering::Release);
-
-                    // done
-                    return val;
-                }
-
-                // failed to checkout, break and let the remainder logic to handle the rest
-                break;
-            }*/
 
             // update to the next position now.
             pos = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
@@ -467,7 +150,7 @@ impl<T: Default> SyncPool<T> {
             // check this slot
             let slot = &mut self.slots[pos];
 
-            // try the try_lock or move on
+            // try the access or move on
             if let Ok(i) = slot.access(false) {
                 // now we're locked, get the val and update internal states
                 self.curr.store(pos, Ordering::Release);
@@ -479,16 +162,18 @@ impl<T: Default> SyncPool<T> {
                 return;
             }
 
-/*            if slot.try_lock(false) {
+/*
+            if slot.access(false) {
                 // now we're locked, get the val and update internal states
                 self.curr.store(pos, Ordering::Release);
 
                 // put the value back into the slot
                 slot.release(val, self.reset_handle.load(Ordering::Acquire));
-                slot.unlock();
+                slot.leave();
 
                 return;
-            }*/
+            }
+*/
 
             // update states
             pos = self.curr.fetch_sub(1, Ordering::AcqRel) % cap;
@@ -506,7 +191,7 @@ impl<T: Default> SyncPool<T> {
 
         (0..size).for_each(|_| {
             // add the slice back to the vec container
-            s.push(Slot2::new(true));
+            s.push(Bucket2::new(true));
         });
 
         SyncPool {
@@ -636,7 +321,7 @@ where
         if safe {
             // update the slots by pushing `additional` slots
             (0..additional).for_each(|_| {
-                self.slots.push(Slot2::new(true));
+                self.slots.push(Bucket2::new(true));
             });
 
             self.fault_count.store(0, Ordering::Release);
