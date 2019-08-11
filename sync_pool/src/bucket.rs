@@ -59,14 +59,14 @@ impl<T: Default> Bucket<T> {
             .access
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Acquire)
             .is_err()
-            {
-                if count == 0 {
-                    return false;
-                }
-
-                cpu_relax(2 * count);
-                count -= 1;
+        {
+            if count == 0 {
+                return false;
             }
+
+            cpu_relax(2 * count);
+            count -= 1;
+        }
 
         if (get && self.len == 0) || (!get && self.len == SLOT_CAP) {
             // not actually locked
@@ -185,61 +185,73 @@ impl<T: Default> Bucket2<T> {
     }
 
     pub(crate) fn access(&self, get: bool) -> Result<usize, ()> {
-        // quick rejection if the condition won't match
+        // gate keeper: quick rejection if the condition won't match
         let curr_len = self.len.load(Ordering::SeqCst);
-        if (get && curr_len == 0) || (!get && curr_len == SLOT_CAP) {
+        if (get && curr_len == 0) || (!get && curr_len >= SLOT_CAP) {
             return Err(());
         }
 
+        //TODO: instead of updating self.len, use visitor counter to accomplish the task
+
         // pre-checkout, make sure the len is in post-action state so it can reject future attempts
         // if it's unlikely to succeed in this slot.
-        let mut trials = if get {
-            self.len.fetch_add(1, Ordering::AcqRel);
-            4
+        let (curr_len, mut trials) = if get {
+            (self.len.fetch_sub(1, Ordering::AcqRel), 4)
         } else {
-            self.len.fetch_sub(1, Ordering::AcqRel);
-            2
+            (self.len.fetch_add(1, Ordering::AcqRel), 2)
         };
 
-        let mut start = self.bitmap.load(Ordering::Acquire);
-        let (mut target, mut pos) = match enter(start, get) {
-            Ok(result) => (result.0, result.1),
-            Err(()) => return self.access_failure(get),
-        };
+        // oops, last op blew off the roof, back off mate. Note that (0 - 1 == MAX_USIZE) for stack
+        // overflow, still way off the roof and a proof of not doing well.
+        if curr_len > SLOT_CAP {
+//            println!("No luck with {} ... first fail: {}", if get { "get" } else { "put" }, curr_len);
+            return self.access_failure(get);
+        }
 
-        // main loop to try to update the bitmap
-        while let Err(next) =
-        self.bitmap
-            .compare_exchange(start, target, Ordering::Acquire, Ordering::Acquire)
-            {
-                // timeout, try next slot
-                if trials == 0 {
-                    return self.access_failure(get);
-                }
+        while trials > 0 {
+            // init try
+            let pos = match enter(self.bitmap.load(Ordering::Acquire), get) {
+                Ok(result) => result,
+                Err(()) => {
 
-                trials -= 1;
-                start = next;
+//                    println!("No luck with {} ... second fail", if get { "get" } else { "put" });
 
-                match enter(start, get) {
-                    Ok(result) => {
-                        target = result.0;
-                        pos = result.1;
-                    }
-                    Err(()) => return self.access_failure(get),
-                };
+                    return self.access_failure(get)
+                },
+            };
+
+            // main loop to try to update the bitmap
+            let mask = 0b10 << (2 * pos);
+            let old = self.bitmap.fetch_or(mask, Ordering::AcqRel);
+
+            // if the lock bit we replaced was not yet marked at the atomic op, we're good
+            if old & mask == 0 {
+                return Ok(pos as usize)
             }
 
-        Ok(pos as usize)
+            // otherwise, try again.
+            trials -= 1;
+        }
+
+//        println!("No luck with {} ... final fail", if get { "get" } else { "put" });
+        self.access_failure(get)
     }
 
     pub(crate) fn leave(&self, pos: usize) {
-        let pad_pos = 2 * pos as u16;
-        if self.bitmap.load(Ordering::Acquire) & (0b10 << pad_pos) == 0 {
-            // bit already marked as free-to-use
-            return;
-        }
+        let mask = 0b10 << (2 * pos as u16);
 
-        self.bitmap.fetch_xor(0b11 << pad_pos, Ordering::SeqCst);
+//        let padded = 2 * pos as u16;
+//        if self.bitmap.load(Ordering::Acquire) & (0b10 << padded) == 0 {
+//            // bit already marked as free-to-use
+//            return;
+//        }
+
+        loop {
+            let old = self.bitmap.fetch_xor(mask, Ordering::SeqCst);
+            if old & mask == mask {
+                return;
+            }
+        }
     }
 
     /// The function is safe because it's used internally, and each time it's guaranteed a access has
@@ -265,7 +277,9 @@ impl<T: Default> Bucket2<T> {
         if self.slot[pos].is_none() {
             // reset the struct before releasing it to the pool
             if !reset.is_null() {
-                unsafe { (*reset)(&mut val); }
+                unsafe {
+                    (*reset)(&mut val);
+                }
             }
 
             // move the value in
@@ -279,14 +293,18 @@ impl<T: Default> Bucket2<T> {
         drop(val);
     }
 
+    pub(crate) fn debug(&self) {
+        println!("{:#018b}", self.bitmap.load(Ordering::SeqCst));
+    }
+
     #[inline]
     fn access_failure(&self, get: bool) -> Result<usize, ()> {
 //        println!("No luck with {} ...", if get { "get" } else { "put" });
 
         if get {
-            self.len.fetch_sub(1, Ordering::AcqRel);
-        } else {
             self.len.fetch_add(1, Ordering::AcqRel);
+        } else {
+            self.len.fetch_sub(1, Ordering::AcqRel);
         }
 
         Err(())

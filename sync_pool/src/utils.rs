@@ -14,19 +14,14 @@ pub(crate) fn cpu_relax(count: usize) {
 }
 
 /// Assuming we have 8 elements per slot, otherwise must update the assumption.
-pub(crate) fn enter(src: u16, get: bool) -> Result<(u16, u16), ()> {
+pub(crate) fn enter(src: u16, get: bool) -> Result<u16, ()> {
     let mut pos = 0;
     let mut base = if get { src ^ GET_MASK } else { src ^ PUT_MASK };
 
     while base > 0 {
         if (base & 0b11) == 0b11 {
             // update the state and the position
-            if let Ok(state) = in_state(src, 2 * pos) {
-                return Ok((state, pos));
-            }
-
-            // shouldn't make it here
-            return Err(());
+            return Ok(pos);
         }
 
         pos += 1;

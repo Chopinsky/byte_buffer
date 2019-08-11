@@ -134,7 +134,9 @@ fn run(alloc: bool) -> u128 {
             assert_eq!(arr.len(), BUF_CAP);
 
             if !alloc {
-                unsafe { POOL.as_mut().unwrap().put(arr); }
+                unsafe {
+                    POOL.as_mut().unwrap().put(arr);
+                }
             }
         }
     });
@@ -164,7 +166,15 @@ fn run(alloc: bool) -> u128 {
     send_two.join().unwrap_or_default();
     recv_one.join().unwrap_or_default();
 
-    now.elapsed().as_micros()
+    let time = now.elapsed().as_micros();
+
+//    if !alloc {
+//        unsafe {
+//            POOL.as_mut().unwrap().debug();
+//        }
+//    }
+
+    time
 }
 
 fn cleaner(slice: &mut Buffer) {

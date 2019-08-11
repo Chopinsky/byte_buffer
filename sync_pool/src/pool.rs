@@ -1,7 +1,7 @@
 #![allow(unused)]
 
-use crate::utils::{cpu_relax, enter, exit};
 use crate::bucket::*;
+use crate::utils::{cpu_relax, enter, exit};
 use std::fmt::Error;
 use std::mem::MaybeUninit;
 use std::ptr;
@@ -100,12 +100,12 @@ impl<T: Default> SyncPool<T> {
                 let checkout = slot.checkout(i);
                 slot.leave(i);
 
-/*
-            if slot.access(true) {
-                // try to checkout one slot
-                let checkout = slot.checkout();
-                slot.leave();
-*/
+                /*
+                            if slot.access(true) {
+                                // try to checkout one slot
+                                let checkout = slot.checkout();
+                                slot.leave();
+                */
 
                 if let Ok(val) = checkout {
                     // now we're locked, get the val and update internal states
@@ -162,18 +162,18 @@ impl<T: Default> SyncPool<T> {
                 return;
             }
 
-/*
-            if slot.access(false) {
-                // now we're locked, get the val and update internal states
-                self.curr.store(pos, Ordering::Release);
+            /*
+                        if slot.access(false) {
+                            // now we're locked, get the val and update internal states
+                            self.curr.store(pos, Ordering::Release);
 
-                // put the value back into the slot
-                slot.release(val, self.reset_handle.load(Ordering::Acquire));
-                slot.leave();
+                            // put the value back into the slot
+                            slot.release(val, self.reset_handle.load(Ordering::Acquire));
+                            slot.leave();
 
-                return;
-            }
-*/
+                            return;
+                        }
+            */
 
             // update states
             pos = self.curr.fetch_sub(1, Ordering::AcqRel) % cap;
@@ -183,6 +183,12 @@ impl<T: Default> SyncPool<T> {
             if trials == 0 || pos == origin {
                 break;
             }
+        }
+    }
+
+    pub fn debug(&self) {
+        for item in self.slots.iter() {
+            item.debug();
         }
     }
 
