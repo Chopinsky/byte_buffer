@@ -1,11 +1,10 @@
 #![allow(unused)]
 
 use crate::bucket::*;
-use crate::utils::{cpu_relax, enter, exit};
-use std::fmt::Error;
-use std::mem::MaybeUninit;
+use crate::utils::cpu_relax;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU16, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use std::ops::Deref;
 
 const POOL_SIZE: usize = 8;
 const EXPANSION_CAP: usize = 512;
@@ -98,14 +97,12 @@ impl<T: Default> SyncPool<T> {
             if let Ok(i) = slot.access(true) {
                 // try to checkout one slot
                 let checkout = slot.checkout(i);
-                slot.leave(i);
+                slot.leave(i as u16);
 
-                /*
-                            if slot.access(true) {
-                                // try to checkout one slot
-                                let checkout = slot.checkout();
-                                slot.leave();
-                */
+/*                if slot.access(true) {
+                    // try to checkout one slot
+                    let checkout = slot.checkout();
+                    slot.leave();*/
 
                 if let Ok(val) = checkout {
                     // now we're locked, get the val and update internal states
@@ -157,23 +154,21 @@ impl<T: Default> SyncPool<T> {
 
                 // put the value back and reset
                 slot.release(i, val, self.reset_handle.load(Ordering::Acquire));
-                slot.leave(i);
+                slot.leave(i as u16);
 
                 return;
             }
 
-            /*
-                        if slot.access(false) {
-                            // now we're locked, get the val and update internal states
-                            self.curr.store(pos, Ordering::Release);
+/*            if slot.access(false) {
+                // now we're locked, get the val and update internal states
+                self.curr.store(pos, Ordering::Release);
 
-                            // put the value back into the slot
-                            slot.release(val, self.reset_handle.load(Ordering::Acquire));
-                            slot.leave();
+                // put the value back into the slot
+                slot.release(val, self.reset_handle.load(Ordering::Acquire));
+                slot.leave();
 
-                            return;
-                        }
-            */
+                return;
+            }*/
 
             // update states
             pos = self.curr.fetch_sub(1, Ordering::AcqRel) % cap;
@@ -186,11 +181,13 @@ impl<T: Default> SyncPool<T> {
         }
     }
 
+/*
     pub fn debug(&self) {
         for item in self.slots.iter() {
             item.debug();
         }
     }
+*/
 
     fn make_pool(size: usize) -> Self {
         let mut s = Vec::with_capacity(size);
@@ -346,3 +343,11 @@ where
             .swap(Box::into_raw(h) as *mut ResetHandle<T>, Ordering::Release);
     }
 }
+
+//impl<T> Deref for SyncPool<T> {
+//    type Target = Self;
+//
+//    fn deref(&self) -> &Self::Target {
+//        &self
+//    }
+//}

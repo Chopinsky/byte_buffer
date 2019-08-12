@@ -1,184 +1,79 @@
-#![allow(dead_code)]
-
 extern crate sync_pool;
 
+use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use sync_pool::prelude::*;
+use std::sync::mpsc::SyncSender;
 
-const BUF_CAP: usize = 1024;
-const TEST_SIZE: usize = 128;
-const SLEEP: u64 = 64;
-const DENOMINATOR: usize = 1;
+/// Number of producers that runs in this test
+const COUNT: usize = 128;
 
-static mut POOL: Option<SyncPool<Buffer>> = None;
+/// A shared pool, one can imagine other ways of sharing the pool concurrently, here we choose to use
+/// an unsafe version to simplify the example.
+static mut POOL: Option<SyncPool<Box<ComplexStruct>>> = None;
 
-//struct Buffer(Box<[u8; BUF_CAP]>);
-struct Buffer([u8; BUF_CAP]);
-
-impl Buffer {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
+#[derive(Default, Debug)]
+struct ComplexStruct {
+    id: usize,
+    name: String,
+    body: Vec<String>,
+    flags: Vec<usize>,
+    children: Vec<usize>,
+    index: HashMap<usize, String>,
+    rev_index: HashMap<String, usize>,
 }
 
-impl Default for Buffer {
-    fn default() -> Self {
-        let mut base = Buffer([0u8; BUF_CAP]); // Buffer(Box::new([0u8; BUF_CAP]))
-        base.0[42] = 42;
-
-        base
-    }
+/// Make sure we build up the pool before use
+unsafe fn pool_setup() -> (Pin<&'static mut SyncPool<Box<ComplexStruct>>>, Pin<&'static mut SyncPool<Box<ComplexStruct>>>) {
+    POOL.replace(SyncPool::with_size(COUNT / 2));
+    (Pin::new(POOL.as_mut().unwrap()), Pin::new(POOL.as_mut().unwrap()))
 }
 
+/// Main example body
 fn main() {
-    pool_setup();
+    // let's make the pool slightly smaller than the demand, this will simulate a service under pressure
+    // such that the pool can't completely meet the demand without dynamically expand the pool.
+    let (pinned_producer, pinned_consumer) = unsafe { pool_setup() };
 
-    let trials = 64;
-    let mut sum = 0;
+    // make the channel that establish a concurrent pipeline.
+    let (tx, rx) = mpsc::sync_channel(64);
 
-    for i in 0..trials {
-        let n = thread::spawn(|| run(true));
-        let p = thread::spawn(|| run(false));
+    // data producer loop
+    thread::spawn(move || {
+        let producer = pinned_producer.get_mut();
 
-        let p_time = p.join().unwrap_or_default() as i128;
-        let n_time = n.join().unwrap_or_default() as i128;
-
-        let res = n_time - p_time;
-        sum += res;
-
-        println!(">>> Trial: {}; Advance: {} us <<<", i, res);
-    }
-
-    println!(
-        "\nAverage: {} ms\n",
-        (sum as f64) / (trials as f64) / 1000f64
-    );
-}
-
-fn pool_setup() {
-    unsafe {
-        let pool: SyncPool<Buffer> = SyncPool::with_size(128);
-
-        /*
-
-        // clean up the underlying buffer, this handle can also be used to shrink the underlying
-        // buffer to save for space, though at a cost of extra overhead for doing that.
-        pool.reset_handle(cleaner);
-
-        // Alternatively, use an anonymous function for the same purpose. Closure can't be used as
-        // a handle, though.
-        pool.reset_handle(|slice: &mut [u8; BUF_CAP]| {
-            for i in 0..slice.len() {
-                slice[i] = 0;
-            }
-
-            println!("Byte slice cleared...");
-        });
-
-        */
-
-        POOL.replace(pool);
-    }
-}
-
-fn run(alloc: bool) -> u128 {
-    let (tx, rx) = mpsc::sync_channel(32);
-    let tx_clone = tx.clone();
-
-    let now = Instant::now();
-
-    let send_one = thread::spawn(move || {
-        for i in 0..TEST_SIZE {
-            if i % DENOMINATOR == 0 {
-                thread::sleep(Duration::from_nanos(SLEEP));
-            }
-
-            let arr = if alloc {
-                Default::default()
-            } else {
-                unsafe { POOL.as_mut().unwrap().get() }
-            };
-
-            assert_eq!(arr.len(), BUF_CAP);
-            assert_eq!(arr.0[42], 42);
-
-            tx_clone.try_send(arr).unwrap_or_default();
+        for i in 0..COUNT {
+            run(producer, &tx, i);
         }
     });
 
-    let send_two = thread::spawn(move || {
-        for i in 0..TEST_SIZE {
-            if i % DENOMINATOR == 0 {
-                thread::sleep(Duration::from_nanos(SLEEP));
-            }
+    // data consumer logic
+    let handler = thread::spawn(move || {
+        let consumer = pinned_consumer.get_mut();
 
-            let arr = if alloc {
-                Default::default()
-            } else {
-                unsafe { POOL.as_mut().unwrap().get() }
-            };
-
-            assert_eq!(arr.len(), BUF_CAP);
-            assert_eq!(arr.0[42], 42);
-
-            tx.try_send(arr).unwrap_or_default();
+        for content in rx {
+            println!("Receiving struct with id: {}", content.id);
+            consumer.put(content);
         }
     });
 
-    let recv_one = thread::spawn(move || {
-        thread::sleep(Duration::from_micros(5));
+    // wait for the receiver to finish and print the result.
+    handler.join().unwrap_or_default();
 
-        while let Ok(arr) = rx.recv() {
-            assert_eq!(arr.len(), BUF_CAP);
-
-            if !alloc {
-                unsafe {
-                    POOL.as_mut().unwrap().put(arr);
-                }
-            }
-        }
-    });
-
-    for i in 0..TEST_SIZE {
-        // sleep a bit to create some concurrent actions
-        if i % DENOMINATOR == 1 {
-            thread::sleep(Duration::from_nanos(SLEEP));
-        }
-
-        let arr = if alloc {
-            Default::default()
-        } else {
-            unsafe { POOL.as_mut().unwrap().get() }
-        };
-
-        assert_eq!(arr.len(), BUF_CAP);
-        assert_eq!(arr.0[42], 42);
-
-        if !alloc {
-            // when done using the object, make sure to put it back so the pool won't dry up
-            unsafe { POOL.as_mut().unwrap().put(arr) };
-        }
-    }
-
-    send_one.join().unwrap_or_default();
-    send_two.join().unwrap_or_default();
-    recv_one.join().unwrap_or_default();
-
-    let time = now.elapsed().as_micros();
-
-//    if !alloc {
-//        unsafe {
-//            POOL.as_mut().unwrap().debug();
-//        }
-//    }
-
-    time
+    println!("All done...");
 }
 
-fn cleaner(slice: &mut Buffer) {
-    for i in 0..slice.len() {
-        slice.0[i] = 0;
-    }
+fn run(pool: &mut SyncPool<Box<ComplexStruct>>, chan: &SyncSender<Box<ComplexStruct>>, id: usize) {
+    // take a pre-init struct from the pool
+    let mut content = pool.get();
+    content.id = id;
+
+    // assuming we're doing some stuff in this period
+    thread::sleep(Duration::from_nanos(32));
+
+    // done with the stuff, send the result out.
+    chan.send(content).unwrap_or_default();
 }

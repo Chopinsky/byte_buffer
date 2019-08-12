@@ -19,7 +19,7 @@ pub(crate) fn enter(src: u16, get: bool) -> Result<u16, ()> {
     let mut base = if get { src ^ GET_MASK } else { src ^ PUT_MASK };
 
     while base > 0 {
-        if (base & 0b11) == 0b11 {
+        if base & 0b11 == 0b11 {
             // update the state and the position
             return Ok(pos);
         }
