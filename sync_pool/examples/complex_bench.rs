@@ -2,20 +2,32 @@
 
 extern crate sync_pool;
 
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use sync_pool::prelude::*;
 
 const BUF_CAP: usize = 1024;
-const TEST_SIZE: usize = 128;
+const TEST_SIZE: usize = 64;
 const SLEEP: u64 = 64;
 const DENOMINATOR: usize = 1;
 
-static mut POOL: Option<SyncPool<Buffer>> = None;
+static mut POOL: Option<SyncPool<Box<ComplexStruct>>> = None;
 
 //struct Buffer(Box<[u8; BUF_CAP]>);
 struct Buffer([u8; BUF_CAP]);
+
+#[derive(Default, Debug)]
+struct ComplexStruct {
+    id: usize,
+    name: String,
+    body: Vec<String>,
+    flags: Vec<usize>,
+    children: Vec<usize>,
+    index: HashMap<usize, String>,
+    rev_index: HashMap<String, usize>,
+}
 
 impl Buffer {
     fn len(&self) -> usize {
@@ -25,7 +37,9 @@ impl Buffer {
 
 impl Default for Buffer {
     fn default() -> Self {
-        let mut base = Buffer([0u8; BUF_CAP]); // Buffer(Box::new([0u8; BUF_CAP]))
+        let mut base = Buffer([0u8; BUF_CAP]);
+//        let mut base = Buffer(Box::new([0u8; BUF_CAP]));
+
         base.0[42] = 42;
 
         base
@@ -38,6 +52,8 @@ fn main() {
     let async_mode = true;
     let trials = 64;
     let mut sum = 0;
+
+    println!("Init len: {}", unsafe { POOL.as_ref().unwrap().len() });
 
     for i in 0..trials {
         let res = if async_mode {
@@ -58,6 +74,10 @@ fn main() {
         sum += res;
 
         println!(">>> Trial: {}; Advance: {} us <<<", i, res);
+
+        if i > 60 {
+            println!("Remainder len: {}", unsafe { POOL.as_ref().unwrap().len() });
+        }
     }
 
     println!(
@@ -68,13 +88,13 @@ fn main() {
 
 fn pool_setup() {
     unsafe {
-        let pool: SyncPool<Buffer> = SyncPool::with_size(128);
-
-        /*
+        let mut pool = SyncPool::with_size(128);
 
         // clean up the underlying buffer, this handle can also be used to shrink the underlying
         // buffer to save for space, though at a cost of extra overhead for doing that.
         pool.reset_handle(cleaner);
+
+        /*
 
         // Alternatively, use an anonymous function for the same purpose. Closure can't be used as
         // a handle, though.
@@ -104,16 +124,20 @@ fn run(alloc: bool) -> u128 {
                 thread::sleep(Duration::from_nanos(SLEEP));
             }
 
-            let arr = if alloc {
+            let mut data = if alloc {
                 Default::default()
             } else {
                 unsafe { POOL.as_mut().unwrap().get() }
             };
 
-            assert_eq!(arr.len(), BUF_CAP);
-            assert_eq!(arr.0[42], 42);
+            assert!(data.id == 21 || data.id == 0);
+            assert_ne!(data.id, 42);
+            data.id = 42;
 
-            tx_clone.try_send(arr).unwrap_or_default();
+/*            assert_eq!(arr.len(), BUF_CAP);
+            assert_eq!(arr.0[42], 42);*/
+
+            tx_clone.try_send(data).unwrap_or_default();
         }
     });
 
@@ -123,16 +147,20 @@ fn run(alloc: bool) -> u128 {
                 thread::sleep(Duration::from_nanos(SLEEP));
             }
 
-            let arr = if alloc {
+            let mut data = if alloc {
                 Default::default()
             } else {
                 unsafe { POOL.as_mut().unwrap().get() }
             };
 
-            assert_eq!(arr.len(), BUF_CAP);
-            assert_eq!(arr.0[42], 42);
+            assert!(data.id == 21 || data.id == 0);
+            assert_ne!(data.id, 42);
+            data.id = 42;
 
-            tx.try_send(arr).unwrap_or_default();
+/*            assert_eq!(arr.len(), BUF_CAP);
+            assert_eq!(arr.0[42], 42);*/
+
+            tx.try_send(data).unwrap_or_default();
         }
     });
 
@@ -140,7 +168,7 @@ fn run(alloc: bool) -> u128 {
         thread::sleep(Duration::from_micros(5));
 
         while let Ok(arr) = rx.recv() {
-            assert_eq!(arr.len(), BUF_CAP);
+//            assert_eq!(arr.len(), BUF_CAP);
 
             if !alloc {
                 unsafe {
@@ -156,18 +184,22 @@ fn run(alloc: bool) -> u128 {
             thread::sleep(Duration::from_nanos(SLEEP));
         }
 
-        let arr = if alloc {
+        let mut data = if alloc {
             Default::default()
         } else {
             unsafe { POOL.as_mut().unwrap().get() }
         };
 
-        assert_eq!(arr.len(), BUF_CAP);
-        assert_eq!(arr.0[42], 42);
+        assert!(data.id == 21 || data.id == 0);
+        assert_ne!(data.id, 42);
+        data.id = 42;
+
+/*        assert_eq!(arr.len(), BUF_CAP);
+        assert_eq!(arr.0[42], 42);*/
 
         if !alloc {
             // when done using the object, make sure to put it back so the pool won't dry up
-            unsafe { POOL.as_mut().unwrap().put(arr) };
+            unsafe { POOL.as_mut().unwrap().put(data) };
         }
     }
 
@@ -175,21 +207,9 @@ fn run(alloc: bool) -> u128 {
     send_two.join().unwrap_or_default();
     recv_one.join().unwrap_or_default();
 
-    let time = now.elapsed().as_micros();
-
-/*
-    if !alloc {
-        unsafe {
-            POOL.as_mut().unwrap().debug();
-        }
-    }
-*/
-
-    time
+    now.elapsed().as_micros()
 }
 
-fn cleaner(slice: &mut Buffer) {
-    for i in 0..slice.len() {
-        slice.0[i] = 0;
-    }
+fn cleaner(data: &mut Box<ComplexStruct>) {
+    data.id = 21;
 }

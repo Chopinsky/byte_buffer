@@ -1,19 +1,20 @@
 extern crate sync_pool;
 
 use std::collections::HashMap;
+use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::sync::mpsc;
+use std::sync::mpsc::SyncSender;
 use std::thread;
 use std::time::Duration;
 use sync_pool::prelude::*;
-use std::sync::mpsc::SyncSender;
 
 /// Number of producers that runs in this test
 const COUNT: usize = 128;
 
 /// A shared pool, one can imagine other ways of sharing the pool concurrently, here we choose to use
 /// an unsafe version to simplify the example.
-static mut POOL: Option<SyncPool<Box<ComplexStruct>>> = None;
+static mut POOL: MaybeUninit<SyncPool<Box<ComplexStruct>>> = MaybeUninit::uninit();
 
 #[derive(Default, Debug)]
 struct ComplexStruct {
@@ -27,9 +28,16 @@ struct ComplexStruct {
 }
 
 /// Make sure we build up the pool before use
-unsafe fn pool_setup() -> (Pin<&'static mut SyncPool<Box<ComplexStruct>>>, Pin<&'static mut SyncPool<Box<ComplexStruct>>>) {
-    POOL.replace(SyncPool::with_size(COUNT / 2));
-    (Pin::new(POOL.as_mut().unwrap()), Pin::new(POOL.as_mut().unwrap()))
+unsafe fn pool_setup() -> (
+    Pin<&'static mut SyncPool<Box<ComplexStruct>>>,
+    Pin<&'static mut SyncPool<Box<ComplexStruct>>>,
+) {
+    POOL.as_mut_ptr().write(SyncPool::with_size(COUNT / 2));
+
+    (
+        Pin::new(&mut *POOL.as_mut_ptr()),
+        Pin::new(&mut *POOL.as_mut_ptr()),
+    )
 }
 
 /// Main example body

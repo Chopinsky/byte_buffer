@@ -1,6 +1,7 @@
 #![allow(unused)]
 
 use crate::utils::{cpu_relax, enter};
+use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
@@ -38,6 +39,10 @@ impl<T: Default> Bucket<T> {
             len: SLOT_CAP,
             access: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn len_hint(&self) -> usize {
+        self.len % (SLOT_CAP + 1)
     }
 
     pub(crate) fn access(&self, get: bool) -> bool {
@@ -144,7 +149,7 @@ impl<T: Default> Bucket<T> {
 
 pub(crate) struct Bucket2<T> {
     /// the actual data store
-    slot: [Option<T>; SLOT_CAP],
+    slot: [UnsafeCell<T>; SLOT_CAP],
 
     /// the current ready-to-use slot index, always offset by 1 to the actual index
     len: AtomicUsize,
@@ -155,13 +160,13 @@ pub(crate) struct Bucket2<T> {
 impl<T: Default> Bucket2<T> {
     pub(crate) fn new(fill: bool) -> Self {
         // create the placeholder
-        let mut slice: [Option<T>; SLOT_CAP] = unsafe { MaybeUninit::zeroed().assume_init() };
+        let mut slice: [UnsafeCell<T>; SLOT_CAP] = unsafe { MaybeUninit::zeroed().assume_init() };
         let mut bitmap: u16 = 0;
 
         // fill the slots and update the bitmap
         if fill {
             for (i, item) in slice.iter_mut().enumerate() {
-                item.replace(Default::default());
+                unsafe { item.get().write(Default::default()); }
                 bitmap |= 1 << (2 * i as u16);
             }
         }
@@ -172,6 +177,11 @@ impl<T: Default> Bucket2<T> {
             len: AtomicUsize::new(SLOT_CAP),
             bitmap: AtomicU16::new(bitmap),
         }
+    }
+
+    pub(crate) fn len_hint(&self) -> usize {
+//        println!("{:#018b}", self.bitmap.load(Ordering::Acquire));
+        self.len.load(Ordering::Acquire) % (SLOT_CAP + 1)
     }
 
     pub(crate) fn access(&self, get: bool) -> Result<usize, ()> {
@@ -196,7 +206,7 @@ impl<T: Default> Bucket2<T> {
                 Ok(pos) => (pos, 0b10 << (2 * pos)),
                 Err(()) => {
                     return self.access_failure(get);
-                },
+                }
             };
 
             // main loop to try to update the bitmap
@@ -204,7 +214,7 @@ impl<T: Default> Bucket2<T> {
 
             // if the lock bit we replaced was not yet marked at the atomic op, we're good
             if old & mask == 0 {
-                return Ok(pos as usize)
+                return Ok(pos as usize);
             }
 
             // otherwise, try again after some wait
@@ -229,13 +239,8 @@ impl<T: Default> Bucket2<T> {
     /// The function is safe because it's used internally, and each time it's guaranteed a access has
     /// been acquired previously
     pub(crate) fn checkout(&mut self, pos: usize) -> Result<T, ()> {
-        // check if it's a valid position to swap out the value
-        if self.slot[pos].is_none() {
-            return Err(());
-        }
-
         // return the value
-        Ok(self.swap_out(pos))
+        Ok(swap_out(&self.slot[pos]))
     }
 
     /// The function is safe because it's used internally, and each time it's guaranteed a access has
@@ -243,12 +248,6 @@ impl<T: Default> Bucket2<T> {
     pub(crate) fn release(&mut self, pos: usize, mut val: T, reset: *mut ResetHandle<T>) {
         // need to loop over the slots to make sure we're getting the valid value
         if pos >= SLOT_CAP {
-            return;
-        }
-
-        if self.slot[pos].is_some() {
-            // if all slots are full, no need to fallback, the `val` will be dropped here
-            drop(val);
             return;
         }
 
@@ -260,10 +259,10 @@ impl<T: Default> Bucket2<T> {
         }
 
         // move the value in
-        self.swap_in(pos, val);
+        swap_in(&self.slot[pos], val);
     }
 
-/*    pub(crate) fn debug(&self) {
+    /*    pub(crate) fn debug(&self) {
         println!("{:#018b}", self.bitmap.load(Ordering::SeqCst));
     }*/
 
@@ -277,25 +276,16 @@ impl<T: Default> Bucket2<T> {
 
         Err(())
     }
+}
 
-    fn swap_in(&mut self, index: usize, content: T) {
-        let src = &mut self.slot[index] as *mut Option<T>;
-        unsafe {
-            src.write(Some(content));
-        }
+fn swap_in<T: Default>(container: &UnsafeCell<T>, content: T) {
+    unsafe {
+        container.get().write(content);
     }
+}
 
-    fn swap_out(&mut self, index: usize) -> T {
-        let src = &mut self.slot[index] as *mut Option<T>;
-
-        unsafe {
-            // save off the old values
-            let val = ptr::read(src).unwrap_or_default();
-
-            // swap values
-            src.write(None);
-
-            val
-        }
+fn swap_out<T: Default>(container: &UnsafeCell<T>) -> T {
+    unsafe {
+        container.get().read()
     }
 }

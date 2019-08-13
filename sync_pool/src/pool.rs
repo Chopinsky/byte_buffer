@@ -2,9 +2,9 @@
 
 use crate::bucket::*;
 use crate::utils::cpu_relax;
+use std::ops::Deref;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-use std::ops::Deref;
 
 const POOL_SIZE: usize = 8;
 const EXPANSION_CAP: usize = 512;
@@ -55,7 +55,7 @@ pub struct SyncPool<T> {
     visitor_counter: (AtomicUsize, AtomicBool),
 
     /// the number of times we failed to find an in-store struct to offer
-    fault_count: AtomicUsize,
+    miss_count: AtomicUsize,
 
     /// if we allow expansion of the pool
     configure: AtomicUsize,
@@ -66,7 +66,7 @@ pub struct SyncPool<T> {
 
 impl<T: Default> SyncPool<T> {
     pub fn new() -> Self {
-        Default::default()
+        Self::make_pool(POOL_SIZE)
     }
 
     pub fn with_size(size: usize) -> Self {
@@ -78,6 +78,12 @@ impl<T: Default> SyncPool<T> {
         Self::make_pool(pool_size)
     }
 
+    pub fn len(&self) -> usize {
+        self.slots.iter().fold(0, |sum, item| {
+            sum + item.len_hint()
+        })
+    }
+
     pub fn get(&mut self) -> T {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
@@ -87,7 +93,7 @@ impl<T: Default> SyncPool<T> {
         let origin: usize = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
 
         let mut pos = origin;
-        let mut trials = cap / 2;
+        let mut trials = cap;
 
         loop {
             // check this slot
@@ -99,10 +105,10 @@ impl<T: Default> SyncPool<T> {
                 let checkout = slot.checkout(i);
                 slot.leave(i as u16);
 
-/*                if slot.access(true) {
-                    // try to checkout one slot
-                    let checkout = slot.checkout();
-                    slot.leave();*/
+/*            if slot.access(true) {
+                // try to checkout one slot
+                let checkout = slot.checkout();
+                slot.leave();*/
 
                 if let Ok(val) = checkout {
                     // now we're locked, get the val and update internal states
@@ -129,6 +135,7 @@ impl<T: Default> SyncPool<T> {
         // make sure our guard has been returned if we want the correct visitor count
         drop(_guard);
 
+        self.miss_count.fetch_add(1, Ordering::Relaxed);
         Default::default()
     }
 
@@ -141,7 +148,7 @@ impl<T: Default> SyncPool<T> {
         let origin: usize = self.curr.load(Ordering::Acquire) % cap;
 
         let mut pos = origin;
-        let mut trials = cap / 2;
+        let mut trials = 4 * cap;
 
         loop {
             // check this slot
@@ -181,30 +188,25 @@ impl<T: Default> SyncPool<T> {
         }
     }
 
-/*
-    pub fn debug(&self) {
-        for item in self.slots.iter() {
-            item.debug();
-        }
-    }
-*/
-
     fn make_pool(size: usize) -> Self {
-        let mut s = Vec::with_capacity(size);
-
-        (0..size).for_each(|_| {
-            // add the slice back to the vec container
-            s.push(Bucket2::new(true));
-        });
-
-        SyncPool {
-            slots: s,
+        let mut pool = SyncPool {
+            slots: Vec::with_capacity(size),
             curr: AtomicUsize::new(0),
             visitor_counter: (AtomicUsize::new(1), AtomicBool::new(false)),
-            fault_count: AtomicUsize::new(0),
+            miss_count: AtomicUsize::new(0),
             configure: AtomicUsize::new(0),
             reset_handle: AtomicPtr::new(ptr::null_mut()),
-        }
+        };
+
+        pool.add_slots(size, true);
+        pool
+    }
+
+    #[inline]
+    fn add_slots(&mut self, count: usize, fill: bool) {
+        (0..count).for_each(|_| {
+            self.slots.push(Bucket2::new(fill));
+        });
     }
 
     fn update_config(&mut self, mask: usize, target: bool) {
@@ -229,7 +231,7 @@ where
     T: Default,
 {
     fn default() -> Self {
-        SyncPool::make_pool(POOL_SIZE)
+        SyncPool::new()
     }
 }
 
@@ -246,7 +248,7 @@ impl<T> Drop for SyncPool<T> {
 
 pub trait PoolState {
     fn expansion_enabled(&self) -> bool;
-    fn fault_count(&self) -> usize;
+    fn miss_count(&self) -> usize;
 }
 
 impl<T> PoolState for SyncPool<T> {
@@ -255,8 +257,8 @@ impl<T> PoolState for SyncPool<T> {
         configure & CONFIG_ALLOW_EXPANSION > 0
     }
 
-    fn fault_count(&self) -> usize {
-        self.fault_count.load(Ordering::Acquire)
+    fn miss_count(&self) -> usize {
+        self.miss_count.load(Ordering::Acquire)
     }
 }
 
@@ -323,11 +325,8 @@ where
 
         if safe {
             // update the slots by pushing `additional` slots
-            (0..additional).for_each(|_| {
-                self.slots.push(Bucket2::new(true));
-            });
-
-            self.fault_count.store(0, Ordering::Release);
+            self.add_slots(additional, true);
+            self.miss_count.store(0, Ordering::Release);
         }
 
         // update the internal states
@@ -343,11 +342,3 @@ where
             .swap(Box::into_raw(h) as *mut ResetHandle<T>, Ordering::Release);
     }
 }
-
-//impl<T> Deref for SyncPool<T> {
-//    type Target = Self;
-//
-//    fn deref(&self) -> &Self::Target {
-//        &self
-//    }
-//}
