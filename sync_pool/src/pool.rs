@@ -83,7 +83,11 @@ impl<T: Default> SyncPool<T> {
         self.slots.iter().fold(0, |sum, item| sum + item.len_hint())
     }
 
-    pub fn get(&mut self) -> T {
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&mut self) -> Box<T> {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
 
@@ -141,7 +145,7 @@ impl<T: Default> SyncPool<T> {
         Default::default()
     }
 
-    pub fn put(&mut self, val: T) {
+    pub fn put(&mut self, val: Box<T>) {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
 
