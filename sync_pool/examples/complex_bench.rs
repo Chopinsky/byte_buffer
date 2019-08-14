@@ -9,14 +9,37 @@ use std::time::{Duration, Instant};
 use sync_pool::prelude::*;
 
 const BUF_CAP: usize = 1024;
-const TEST_SIZE: usize = 64;
+const TEST_SIZE: usize = 128;
 const SLEEP: u64 = 64;
 const DENOMINATOR: usize = 1;
 
-static mut POOL: Option<SyncPool<Box<ComplexStruct>>> = None;
+static mut POOL: Option<SyncPool<ComplexStruct>> = None;
 
 //struct Buffer(Box<[u8; BUF_CAP]>);
-struct Buffer([u8; BUF_CAP]);
+struct Buffer {
+    id: usize,
+    buf: [u8; BUF_CAP],
+}
+
+impl Buffer {
+    fn len(&self) -> usize {
+        self.buf.len()
+    }
+}
+
+impl Default for Buffer {
+    fn default() -> Self {
+        let mut base = Buffer {
+            id: 0,
+            buf: [0u8; BUF_CAP],
+        };
+
+        //        let mut base = Buffer(Box::new([0u8; BUF_CAP]));
+
+        base.buf[42] = 42;
+        base
+    }
+}
 
 #[derive(Default, Debug)]
 struct ComplexStruct {
@@ -28,24 +51,6 @@ struct ComplexStruct {
     index: HashMap<usize, String>,
     rev_index: HashMap<String, usize>,
 }
-
-impl Buffer {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-}
-
-impl Default for Buffer {
-    fn default() -> Self {
-        let mut base = Buffer([0u8; BUF_CAP]);
-//        let mut base = Buffer(Box::new([0u8; BUF_CAP]));
-
-        base.0[42] = 42;
-
-        base
-    }
-}
-
 fn main() {
     pool_setup();
 
@@ -74,11 +79,9 @@ fn main() {
         sum += res;
 
         println!(">>> Trial: {}; Advance: {} us <<<", i, res);
-
-        if i > 60 {
-            println!("Remainder len: {}", unsafe { POOL.as_ref().unwrap().len() });
-        }
     }
+
+    println!("Remainder len: {}", unsafe { POOL.as_ref().unwrap().len() });
 
     println!(
         "\nAverage: {} ms\n",
@@ -134,7 +137,7 @@ fn run(alloc: bool) -> u128 {
             assert_ne!(data.id, 42);
             data.id = 42;
 
-/*            assert_eq!(arr.len(), BUF_CAP);
+            /*            assert_eq!(arr.len(), BUF_CAP);
             assert_eq!(arr.0[42], 42);*/
 
             tx_clone.try_send(data).unwrap_or_default();
@@ -157,7 +160,7 @@ fn run(alloc: bool) -> u128 {
             assert_ne!(data.id, 42);
             data.id = 42;
 
-/*            assert_eq!(arr.len(), BUF_CAP);
+            /*            assert_eq!(arr.len(), BUF_CAP);
             assert_eq!(arr.0[42], 42);*/
 
             tx.try_send(data).unwrap_or_default();
@@ -168,7 +171,7 @@ fn run(alloc: bool) -> u128 {
         thread::sleep(Duration::from_micros(5));
 
         while let Ok(arr) = rx.recv() {
-//            assert_eq!(arr.len(), BUF_CAP);
+            //            assert_eq!(arr.len(), BUF_CAP);
 
             if !alloc {
                 unsafe {
@@ -194,7 +197,7 @@ fn run(alloc: bool) -> u128 {
         assert_ne!(data.id, 42);
         data.id = 42;
 
-/*        assert_eq!(arr.len(), BUF_CAP);
+        /*        assert_eq!(arr.len(), BUF_CAP);
         assert_eq!(arr.0[42], 42);*/
 
         if !alloc {
@@ -210,6 +213,6 @@ fn run(alloc: bool) -> u128 {
     now.elapsed().as_micros()
 }
 
-fn cleaner(data: &mut Box<ComplexStruct>) {
+fn cleaner(data: &mut ComplexStruct) {
     data.id = 21;
 }

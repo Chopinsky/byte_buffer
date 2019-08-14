@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 const POOL_SIZE: usize = 8;
 const EXPANSION_CAP: usize = 512;
+const SPIN_PERIOD: usize = 4;
 
 /// Configuration flags
 const CONFIG_ALLOW_EXPANSION: usize = 1;
@@ -79,9 +80,7 @@ impl<T: Default> SyncPool<T> {
     }
 
     pub fn len(&self) -> usize {
-        self.slots.iter().fold(0, |sum, item| {
-            sum + item.len_hint()
-        })
+        self.slots.iter().fold(0, |sum, item| sum + item.len_hint())
     }
 
     pub fn get(&mut self) -> T {
@@ -112,7 +111,7 @@ impl<T: Default> SyncPool<T> {
 
                 if let Ok(val) = checkout {
                     // now we're locked, get the val and update internal states
-                    self.curr.store(pos, Ordering::Release);
+                    self.curr.fetch_add(pos, Ordering::Release);
 
                     // done
                     return val;
@@ -122,12 +121,15 @@ impl<T: Default> SyncPool<T> {
                 break;
             }
 
+            // hold off a bit to reduce contentions
+            cpu_relax(SPIN_PERIOD);
+
             // update to the next position now.
             pos = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
             trials -= 1;
 
             // we've finished 1 loop but not finding a value to extract, quit
-            if trials == 0 || pos == origin {
+            if trials == 0 {
                 break;
             }
         }
@@ -148,7 +150,7 @@ impl<T: Default> SyncPool<T> {
         let origin: usize = self.curr.load(Ordering::Acquire) % cap;
 
         let mut pos = origin;
-        let mut trials = 4 * cap;
+        let mut trials = cap;
 
         loop {
             // check this slot
@@ -177,12 +179,15 @@ impl<T: Default> SyncPool<T> {
                 return;
             }*/
 
+            // hold off a bit to reduce contentions
+            cpu_relax(SPIN_PERIOD / 2);
+
             // update states
             pos = self.curr.fetch_sub(1, Ordering::AcqRel) % cap;
             trials -= 1;
 
             // we've finished 1 loop but not finding a value to extract, quit
-            if trials == 0 || pos == origin {
+            if trials == 0 {
                 break;
             }
         }
@@ -205,6 +210,7 @@ impl<T: Default> SyncPool<T> {
     #[inline]
     fn add_slots(&mut self, count: usize, fill: bool) {
         (0..count).for_each(|_| {
+//            self.slots.push(Bucket::new(fill));
             self.slots.push(Bucket2::new(fill));
         });
     }

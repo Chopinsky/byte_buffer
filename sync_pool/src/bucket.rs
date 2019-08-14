@@ -166,7 +166,9 @@ impl<T: Default> Bucket2<T> {
         // fill the slots and update the bitmap
         if fill {
             for (i, item) in slice.iter_mut().enumerate() {
-                unsafe { item.get().write(Default::default()); }
+                unsafe {
+                    item.get().write(Default::default());
+                }
                 bitmap |= 1 << (2 * i as u16);
             }
         }
@@ -180,7 +182,7 @@ impl<T: Default> Bucket2<T> {
     }
 
     pub(crate) fn len_hint(&self) -> usize {
-//        println!("{:#018b}", self.bitmap.load(Ordering::Acquire));
+        //        println!("{:#018b}", self.bitmap.load(Ordering::Acquire));
         self.len.load(Ordering::Acquire) % (SLOT_CAP + 1)
     }
 
@@ -285,7 +287,5 @@ fn swap_in<T: Default>(container: &UnsafeCell<T>, content: T) {
 }
 
 fn swap_out<T: Default>(container: &UnsafeCell<T>) -> T {
-    unsafe {
-        container.get().read()
-    }
+    unsafe { container.get().read() }
 }
