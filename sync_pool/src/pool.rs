@@ -17,25 +17,25 @@ struct VisitorGuard<'a>(&'a AtomicUsize);
 
 impl<'a> VisitorGuard<'a> {
     fn register(base: &'a (AtomicUsize, AtomicBool)) -> Self {
-        let mut count = 0;
+        let mut count = 8;
 
         // wait if the underlying storage is in protection mode
-        while base.1.load(Ordering::Acquire) {
-            cpu_relax(count + 8);
+        while base.1.load(Ordering::Relaxed) {
+            cpu_relax(count);
 
-            if count < 8 {
-                count += 1;
+            if count > 2 {
+                count -= 1;
             }
         }
 
-        base.0.fetch_add(1, Ordering::SeqCst);
+        base.0.fetch_add(1, Ordering::AcqRel);
         VisitorGuard(&base.0)
     }
 }
 
 impl<'a> Drop for VisitorGuard<'a> {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -87,7 +87,7 @@ impl<T: Default> SyncPool<T> {
         self.len() == 0
     }
 
-    pub fn get(&mut self) -> Box<T> {
+    pub fn get(&mut self) -> T {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
 
@@ -145,7 +145,7 @@ impl<T: Default> SyncPool<T> {
         Default::default()
     }
 
-    pub fn put(&mut self, val: Box<T>) {
+    pub fn put(&mut self, val: T) {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
 

@@ -13,7 +13,7 @@ const TEST_SIZE: usize = 128;
 const SLEEP: u64 = 64;
 const DENOMINATOR: usize = 1;
 
-static mut POOL: Option<SyncPool<ComplexStruct>> = None;
+static mut POOL: Option<SyncPool<Buffer>> = None;
 
 //struct Buffer(Box<[u8; BUF_CAP]>);
 struct Buffer {
@@ -54,7 +54,7 @@ struct ComplexStruct {
 fn main() {
     pool_setup();
 
-    let async_mode = true;
+    let async_mode = false;
     let trials = 64;
     let mut sum = 0;
 
@@ -62,8 +62,8 @@ fn main() {
 
     for i in 0..trials {
         let res = if async_mode {
-            let p = thread::spawn(|| run(false));
             let n = thread::spawn(|| run(true));
+            let p = thread::spawn(|| run(false));
 
             let p_time = p.join().unwrap_or_default() as i128;
             let n_time = n.join().unwrap_or_default() as i128;
@@ -89,13 +89,17 @@ fn main() {
     );
 }
 
+fn sanitizer(data: &mut Buffer) {
+    data.id = 21;
+}
+
 fn pool_setup() {
     unsafe {
         let mut pool = SyncPool::with_size(128);
 
         // clean up the underlying buffer, this handle can also be used to shrink the underlying
         // buffer to save for space, though at a cost of extra overhead for doing that.
-        pool.reset_handle(cleaner);
+        pool.reset_handle(sanitizer);
 
         /*
 
@@ -133,7 +137,7 @@ fn run(alloc: bool) -> u128 {
                 unsafe { POOL.as_mut().unwrap().get() }
             };
 
-            assert!(data.id == 21 || data.id == 0);
+            assert!(data.id == 21 || data.id == 0, "Wrong id: {}", data.id);
             assert_ne!(data.id, 42);
             data.id = 42;
 
@@ -142,6 +146,8 @@ fn run(alloc: bool) -> u128 {
 
             tx_clone.try_send(data).unwrap_or_default();
         }
+
+//        println!("Send one done...");
     });
 
     let send_two = thread::spawn(move || {
@@ -156,7 +162,7 @@ fn run(alloc: bool) -> u128 {
                 unsafe { POOL.as_mut().unwrap().get() }
             };
 
-            assert!(data.id == 21 || data.id == 0);
+            assert!(data.id == 21 || data.id == 0, "Wrong id: {}", data.id);
             assert_ne!(data.id, 42);
             data.id = 42;
 
@@ -165,6 +171,8 @@ fn run(alloc: bool) -> u128 {
 
             tx.try_send(data).unwrap_or_default();
         }
+
+//        println!("Send two done...");
     });
 
     let recv_one = thread::spawn(move || {
@@ -179,6 +187,8 @@ fn run(alloc: bool) -> u128 {
                 }
             }
         }
+
+//        println!("Recv one done...");
     });
 
     for i in 0..TEST_SIZE {
@@ -193,7 +203,7 @@ fn run(alloc: bool) -> u128 {
             unsafe { POOL.as_mut().unwrap().get() }
         };
 
-        assert!(data.id == 21 || data.id == 0);
+//        assert!(data.id == 21 || data.id == 0, "Wrong id: {}", data.id);
         assert_ne!(data.id, 42);
         data.id = 42;
 
@@ -206,13 +216,11 @@ fn run(alloc: bool) -> u128 {
         }
     }
 
+//    println!("Main loop done...");
+
     send_one.join().unwrap_or_default();
     send_two.join().unwrap_or_default();
     recv_one.join().unwrap_or_default();
 
     now.elapsed().as_micros()
-}
-
-fn cleaner(data: &mut ComplexStruct) {
-    data.id = 21;
 }
