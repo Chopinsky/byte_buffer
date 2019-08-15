@@ -62,7 +62,7 @@ pub struct SyncPool<T> {
     configure: AtomicUsize,
 
     /// the handle to be invoked before putting the struct back
-    reset_handle: AtomicPtr<ResetHandle<T>>,
+    reset_handle: Option<fn(&mut T)>,
 }
 
 impl<T: Default> SyncPool<T> {
@@ -87,7 +87,7 @@ impl<T: Default> SyncPool<T> {
         self.len() == 0
     }
 
-    pub fn get(&mut self) -> T {
+    pub fn get(&mut self) -> Box<T> {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
 
@@ -145,7 +145,7 @@ impl<T: Default> SyncPool<T> {
         Default::default()
     }
 
-    pub fn put(&mut self, val: T) {
+    pub fn put(&mut self, val: Box<T>) {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
 
@@ -166,7 +166,7 @@ impl<T: Default> SyncPool<T> {
                 self.curr.store(pos, Ordering::Release);
 
                 // put the value back and reset
-                slot.release(i, val, self.reset_handle.load(Ordering::Acquire));
+                slot.release(i, val, self.reset_handle);
                 slot.leave(i as u16);
 
                 return;
@@ -204,7 +204,7 @@ impl<T: Default> SyncPool<T> {
             visitor_counter: (AtomicUsize::new(1), AtomicBool::new(false)),
             miss_count: AtomicUsize::new(0),
             configure: AtomicUsize::new(0),
-            reset_handle: AtomicPtr::new(ptr::null_mut()),
+            reset_handle: None,
         };
 
         pool.add_slots(size, true);
@@ -251,7 +251,7 @@ impl<T> Drop for SyncPool<T> {
 
         unsafe {
             // now drop the reset handle if it's not null
-            Box::from_raw(self.reset_handle.swap(ptr::null_mut(), Ordering::SeqCst));
+            self.reset_handle.take();
         }
     }
 }
@@ -273,22 +273,31 @@ impl<T> PoolState for SyncPool<T> {
 }
 
 pub trait PoolManager<T> {
-    fn allow_expansion(&mut self, allow: bool);
+    fn reset_handle(&mut self, handle: fn(&mut T)) -> &mut Self;
+    fn allow_expansion(&mut self, allow: bool) -> &mut Self;
     fn expand(&mut self, additional: usize, block: bool) -> bool;
-    fn reset_handle(&mut self, handle: ResetHandle<T>);
 }
 
 impl<T> PoolManager<T> for SyncPool<T>
 where
     T: Default,
 {
-    fn allow_expansion(&mut self, allow: bool) {
+    fn reset_handle(&mut self, handle: fn(&mut T)) -> &mut Self {
+        let h = Box::new(handle);
+        self.reset_handle
+            .replace(handle);
+
+        self
+    }
+
+    fn allow_expansion(&mut self, allow: bool) -> &mut Self {
         if !(self.expansion_enabled() ^ allow) {
             // not flipping the configuration, return
-            return;
+            return self;
         }
 
         self.update_config(CONFIG_ALLOW_EXPANSION, allow);
+        self
     }
 
     fn expand(&mut self, additional: usize, block: bool) -> bool {
@@ -344,11 +353,5 @@ where
         self.visitor_counter.1.store(false, Ordering::Release);
 
         safe
-    }
-
-    fn reset_handle(&mut self, handle: ResetHandle<T>) {
-        let h = Box::new(handle);
-        self.reset_handle
-            .swap(Box::into_raw(h) as *mut ResetHandle<T>, Ordering::Release);
     }
 }

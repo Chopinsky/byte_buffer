@@ -1,14 +1,12 @@
 #![allow(unused)]
 
 use crate::utils::{cpu_relax, enter};
-use std::cell::UnsafeCell;
-use std::mem::{MaybeUninit, ManuallyDrop};
+use std::mem::{self, MaybeUninit};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 
 /// Constants
 pub(crate) const SLOT_CAP: usize = 8;
-pub(crate) type ResetHandle<T> = fn(&mut T);
 
 pub(crate) struct Bucket<T> {
     /// the actual data store
@@ -96,7 +94,7 @@ impl<T: Default> Bucket<T> {
 
     /// The function is safe because it's used internally, and each time it's guaranteed a access has
     /// been acquired previously
-    pub(crate) fn release(&mut self, mut val: T, reset: *mut ResetHandle<T>) {
+    pub(crate) fn release(&mut self, mut val: T, reset: *mut fn(&mut T)) {
         // need to loop over the slots to make sure we're getting the valid value
         let i = self.len;
         if i >= SLOT_CAP {
@@ -149,7 +147,7 @@ impl<T: Default> Bucket<T> {
 
 pub(crate) struct Bucket2<T> {
     /// the actual data store
-    slot: [UnsafeCell<T>; SLOT_CAP],
+    slot: [*mut T; SLOT_CAP],
 
     /// the current ready-to-use slot index, always offset by 1 to the actual index
     len: AtomicUsize,
@@ -160,16 +158,13 @@ pub(crate) struct Bucket2<T> {
 impl<T: Default> Bucket2<T> {
     pub(crate) fn new(fill: bool) -> Self {
         // create the placeholder
-        let mut slice: [UnsafeCell<T>; SLOT_CAP] = unsafe { MaybeUninit::zeroed().assume_init() };
+        let mut slice: [*mut T; SLOT_CAP] = unsafe { MaybeUninit::zeroed().assume_init() };
         let mut bitmap: u16 = 0;
 
         // fill the slots and update the bitmap
         if fill {
             for (i, item) in slice.iter_mut().enumerate() {
-                unsafe {
-                    item.get().write(Default::default());
-                }
-
+                *item = Box::into_raw(Box::new(Default::default()));
                 bitmap |= 1 << (2 * i as u16);
             }
         }
@@ -243,28 +238,26 @@ impl<T: Default> Bucket2<T> {
 
     /// The function is safe because it's used internally, and each time it's guaranteed a access has
     /// been acquired previously
-    pub(crate) fn checkout(&mut self, pos: usize) -> Result<T, ()> {
+    pub(crate) fn checkout(&mut self, pos: usize) -> Result<Box<T>, ()> {
         // return the value
-        swap_out(&self.slot[pos])
+        swap_out(&mut self.slot[pos])
     }
 
     /// The function is safe because it's used internally, and each time it's guaranteed a access has
     /// been acquired previously
-    pub(crate) fn release(&mut self, pos: usize, mut val: T, reset: *mut ResetHandle<T>) {
+    pub(crate) fn release(&mut self, pos: usize, mut val: Box<T>, reset: Option<fn(&mut T)>) {
         // need to loop over the slots to make sure we're getting the valid value
         if pos >= SLOT_CAP {
             return;
         }
 
         // reset the struct before releasing it to the pool
-        if !reset.is_null() {
-            unsafe {
-                (*reset)(&mut val);
-            }
+        if let Some(handle) = reset {
+            handle(&mut val);
         }
 
         // move the value in
-        swap_in(&self.slot[pos], val);
+        swap_in(&mut self.slot[pos], val);
     }
 
     #[inline]
@@ -279,22 +272,34 @@ impl<T: Default> Bucket2<T> {
     }
 }
 
-fn swap_in<T: Default>(container: &UnsafeCell<T>, content: T) {
-    let ptr = container.get();
+fn swap_in<T: Default>(container: &mut *mut T, content: Box<T>) {
+/*    let ptr = container.get();
     if ptr.is_null() {
         return;
     }
 
     unsafe {
         ptr.write(content);
+    }*/
+    if !container.is_null() {
+        return;
     }
+
+    *container = Box::into_raw(content);
 }
 
-fn swap_out<T: Default>(container: &UnsafeCell<T>) -> Result<T, ()> {
-    let ptr = container.get();
+fn swap_out<T: Default>(container: &mut *mut T) -> Result<Box<T>, ()> {
+/*    let ptr = container.get();
     if ptr.is_null() {
         return Err(());
     }
 
-    Ok(unsafe { ptr.read() })
+    Ok(unsafe { ptr.read() })*/
+
+    let val = mem::replace(container, ptr::null_mut());
+    if val.is_null() {
+        return Err(());
+    }
+
+    Ok(unsafe { Box::from_raw(val) })
 }

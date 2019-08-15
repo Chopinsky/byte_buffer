@@ -13,7 +13,8 @@ const TEST_SIZE: usize = 128;
 const SLEEP: u64 = 64;
 const DENOMINATOR: usize = 1;
 
-static mut POOL: Option<SyncPool<Buffer>> = None;
+type TestStruct = Buffer;
+static mut POOL: Option<SyncPool<TestStruct>> = None;
 
 //struct Buffer(Box<[u8; BUF_CAP]>);
 struct Buffer {
@@ -51,10 +52,11 @@ struct ComplexStruct {
     index: HashMap<usize, String>,
     rev_index: HashMap<String, usize>,
 }
+
 fn main() {
     pool_setup();
 
-    let async_mode = false;
+    let async_mode = true;
     let trials = 64;
     let mut sum = 0;
 
@@ -89,10 +91,6 @@ fn main() {
     );
 }
 
-fn sanitizer(data: &mut Buffer) {
-    data.id = 21;
-}
-
 fn pool_setup() {
     unsafe {
         let mut pool = SyncPool::with_size(128);
@@ -117,6 +115,10 @@ fn pool_setup() {
 
         POOL.replace(pool);
     }
+}
+
+fn sanitizer(data: &mut TestStruct) {
+    data.id = 21;
 }
 
 fn run(alloc: bool) -> u128 {
