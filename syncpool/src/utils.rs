@@ -37,10 +37,10 @@ pub(crate) fn exit(src: u16, pos: u16) -> Result<u16, ()> {
     out_state(src, 2 * pos)
 }
 
-/// `2 * pos` -> `padded_pos` is where the access bit locates for slice position `pos`
+/// `2 * pos` -> `padded_pos` is where the enter bit locates for slice position `pos`
 #[inline(always)]
 fn in_state(origin: u16, pad_pos: u16) -> Result<u16, ()> {
-    // the intended state after mark the access bit
+    // the intended state after mark the enter bit
     let next = origin | (0b10 << pad_pos);
 
     // if the marked state is the same as the origin, meaning the src pos is already accessed, quit
@@ -53,7 +53,7 @@ fn in_state(origin: u16, pad_pos: u16) -> Result<u16, ()> {
     Ok(next)
 }
 
-/// `2 * pos` -> `padded_pos` is where the access bit locates for slice position `pos`
+/// `2 * pos` -> `padded_pos` is where the enter bit locates for slice position `pos`
 #[inline(always)]
 fn out_state(origin: u16, pad_pos: u16) -> Result<u16, ()> {
     // only update if the position is marked, otherwise it will be deadlocked
@@ -72,30 +72,30 @@ mod utils_test {
     #[test]
     fn access_pass() {
         let test1 = 0b0101010001010100;
-        assert_eq!(access(test1, false), Ok(0b0101010001010110));
-        assert_eq!(access(test1, true), Ok(0b0101010001011100));
+        assert_eq!(enter(test1, false), Ok(0));
+        assert_eq!(enter(test1, true), Ok(1));
 
         let test2 = 0b0101010001010101;
-        assert_eq!(access(test2, false), Ok(0b0101011001010101));
-        assert_eq!(access(test2, true), Ok(0b0101010001010111));
+        assert_eq!(enter(test2, false), Ok(4));
+        assert_eq!(enter(test2, true), Ok(0));
 
         let test3 = 0b0101010001010111;
-        assert_eq!(access(test3, false), Ok(0b0101011001010111));
-        assert_eq!(access(test3, true), Ok(0b0101010001011111));
+        assert_eq!(enter(test3, false), Ok(4));
+        assert_eq!(enter(test3, true), Ok(1));
 
         let test4 = 0b0101010001011011;
-        assert_eq!(access(test4, false), Ok(0b0101011001011011));
-        assert_eq!(access(test4, true), Ok(0b0101010001111011));
+        assert_eq!(enter(test4, false), Ok(4));
+        assert_eq!(enter(test4, true), Ok(2));
     }
 
     #[test]
     fn access_deny() {
         let test1 = 0b0010000000000000;
-        assert_eq!(access(test1, false), Ok(0b0010000000000010));
-        assert_eq!(access(test1, true), Err(()));
+        assert_eq!(enter(test1, false), Ok(0));
+        assert_eq!(enter(test1, true), Err(()));
 
         let test2 = 0b0111010101010111;
-        assert_eq!(access(test2, false), Err(()));
-        assert_eq!(access(test2, true), Ok(0b0111010101011111));
+        assert_eq!(enter(test2, false), Err(()));
+        assert_eq!(enter(test2, true), Ok(1));
     }
 }

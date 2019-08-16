@@ -18,8 +18,8 @@ mod tests {
 
         for _ in 0..32 {
             let ary = pool.get();
+            assert_eq!(ary.len(), 32);
+            pool.put(ary);
         }
-
-        assert_eq!(2 + 2, 4);
     }
 }
