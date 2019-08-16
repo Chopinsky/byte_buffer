@@ -1,13 +1,13 @@
-[Sync_Pool][docsrs]
+[SyncPool][docsrs]
 ======================
 
-[![Sync_Pool on crates.io][cratesio-image]][cratesio]
-[![Sync_Pool on docs.rs][docsrs-image]][docsrs]
+[![SyncPool on crates.io][cratesio-image]][cratesio]
+[![SyncPool on docs.rs][docsrs-image]][docsrs]
 
-[cratesio]: https://crates.io/crates/sync_pool
-[cratesio-image]: https://img.shields.io/crates/v/sync_pool.svg
-[docsrs-image]: https://docs.rs/sync_pool/badge.svg
-[docsrs]: https://docs.rs/sync_pool
+[cratesio]: https://crates.io/crates/syncpool
+[cratesio-image]: https://img.shields.io/crates/v/syncpool.svg
+[docsrs-image]: https://docs.rs/syncpool/badge.svg
+[docsrs]: https://docs.rs/syncpool
 
 ## What this crate is for
 Inspired by Go's `sync.Pool` module, this crate provides a multithreading-friendly 
@@ -38,14 +38,14 @@ labor for you, allocators nowadays work quite marvelously, especially on the sta
 
 ## Example
 ```rust
-extern crate sync_pool;
+extern crate syncpool;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, SyncSender};
 use std::thread;
 use std::time::Duration;
 
-use sync_pool::prelude::*;
+use syncpool::prelude::*;
 
 // For simplicity and illustration, here we use the most simple but unsafe way to 
 // define the shared pool: make it static mut. Other safer implementation exists 

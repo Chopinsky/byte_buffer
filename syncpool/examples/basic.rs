@@ -1,4 +1,4 @@
-extern crate sync_pool;
+extern crate syncpool;
 
 use std::collections::HashMap;
 use std::mem::MaybeUninit;
@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::sync::mpsc::SyncSender;
 use std::thread;
 use std::time::Duration;
-use sync_pool::prelude::*;
+use syncpool::prelude::*;
 
 /// Number of producers that runs in this test
 const COUNT: usize = 128;

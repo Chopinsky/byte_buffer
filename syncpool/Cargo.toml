@@ -1,12 +1,12 @@
 [package]
-name = "sync_pool"
-version = "0.1.0"
+name = "syncpool"
+version = "0.1.1"
 authors = ["Jacob Zuo <chopinsky@live.com>"]
 description = "A thread-friendly library for recycle of heavy and heap-based objects to reduce allocation and memory pressure"
 edition = "2018"
 readme = "README.md"
 license = "MIT"
-documentation = "https://docs.rs/sync_pool/"
+documentation = "https://docs.rs/syncpool/"
 repository = "https://github.com/Chopinsky/byte_buffer.git"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

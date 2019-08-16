@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
-extern crate sync_pool;
+extern crate syncpool;
 
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
-use sync_pool::prelude::*;
+use syncpool::prelude::*;
 
 const TRIAL_RUNS: usize = 64;
 const TEST_SIZE: usize = 128;

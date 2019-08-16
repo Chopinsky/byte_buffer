@@ -11,13 +11,13 @@ categories = ["concurrency", "memory-management", "data-structures"]
 version = "0.1.1"
 path = "./byte_buffer"
 
-[dependencies.sync_pool]
+[dependencies.syncpool]
 version = "0.1.0"
-path = "./sync_pool"
+path = "./syncpool"
 
 [workspace]
 members = [
     ".",
     "byte_buffer",
-    "sync_pool",
+    "syncpool",
 ]
