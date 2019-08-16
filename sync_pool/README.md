@@ -15,8 +15,25 @@ library to recycle and reuse heavy, heap-based objects, such that the overall
 allocation and memory pressure will be reduced, and hence boosting the performance. 
 
 
-## What this is not
-THere is no silver bullet when 
+## What this crate is NOT for
+There is no such thing as the silver bullet when designing a multithreading project,
+programmer has to judge use cases on a case-by-case base. 
+
+As shown by a few (hundred) benchmarks we have run, it is quite clear that the 
+library can reliably beat the allocator in the following case:
+
+* The object is large enough that it makes sense to live in the heap.
+* The clean up operations required to sanitize the written data before putting the
+ element back to the pool is simple and fast to run.
+* The estimation on the maximum number of elements simultaneously checked out 
+during the program run is good enough, i.e. the parallelism is deterministic; 
+otherwise when the pool is starving (i.e. it doesn't have enough elements left to 
+provide), the performance will suffer because we will need to create (and allocate
+in the heap for) new elements.
+ 
+If your struct is nibble enough to live in the stack without blowing it, or if it's
+not in middle of the hottest code path, you most likely won't need the library to 
+labor for you, allocators nowadays work quite marvelously, especially on the stack. 
 
 
 ## Example
@@ -41,7 +58,9 @@ const COUNT: usize = 128;
 /// The complex data struct for illustration. Usually such a heavy element could also
 /// contain other nested struct, and should almost always be placed in the heap. If 
 /// your struct is *not* heavy enough to be living in the heap, you most likely won't
-/// need this library -- the allocator will work better on the stack. 
+/// need this library -- the allocator will work better on the stack. The only requirement
+/// for the struct is that it has to implement the `Default` trait, which can be derived
+/// in most cases, or implemented easily.
 #[derive(Default, Debug)]
 struct ComplexStruct {
     id: usize,
