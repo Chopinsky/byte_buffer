@@ -1,8 +1,12 @@
 [package]
 name = "sync_pool"
 version = "0.1.0"
-authors = ["Jacob Zuo <chopinsky@live.com>"]
 edition = "2018"
+authors = ["Jacob Zuo <chopinsky@live.com>"]
+description = "A thread-friendly library for recycle of heavy and heap-based objects to reduce allocation and memory pressure"
+readme = "README.md"
+documentation = "https://docs.rs/sync_pool/"
+repository = "https://github.com/Chopinsky/byte_buffer.git"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

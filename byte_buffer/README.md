@@ -1,8 +1,8 @@
 [Byte_Buffer][docsrs]
 ======================
 
-[![Rusty_Express on crates.io][cratesio-image]][cratesio]
-[![Rusty_Express on docs.rs][docsrs-image]][docsrs]
+[![Byte_Buffer on crates.io][cratesio-image]][cratesio]
+[![Byte_Buffer on docs.rs][docsrs-image]][docsrs]
 
 [cratesio]: https://crates.io/crates/byte_buffer
 [cratesio-image]: https://img.shields.io/crates/v/byte_buffer.svg

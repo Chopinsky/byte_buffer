@@ -80,7 +80,7 @@ impl<T: Default> SyncPool<T> {
     }
 
     pub fn len(&self) -> usize {
-        self.slots.iter().fold(0, |sum, item| sum + item.len_hint())
+        self.slots.iter().fold(0, |sum, item| sum + item.size_hint())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -154,7 +154,7 @@ impl<T: Default> SyncPool<T> {
         let origin: usize = self.curr.load(Ordering::Acquire) % cap;
 
         let mut pos = origin;
-        let mut trials = cap;
+        let mut trials = 2 * cap;
 
         loop {
             // check this slot
@@ -249,10 +249,8 @@ impl<T> Drop for SyncPool<T> {
     fn drop(&mut self) {
         self.slots.clear();
 
-        unsafe {
-            // now drop the reset handle if it's not null
-            self.reset_handle.take();
-        }
+        // now drop the reset handle if it's not null
+        self.reset_handle.take();
     }
 }
 
@@ -276,6 +274,7 @@ pub trait PoolManager<T> {
     fn reset_handle(&mut self, handle: fn(&mut T)) -> &mut Self;
     fn allow_expansion(&mut self, allow: bool) -> &mut Self;
     fn expand(&mut self, additional: usize, block: bool) -> bool;
+    fn refill(&mut self, count: usize);
 }
 
 impl<T> PoolManager<T> for SyncPool<T>
@@ -353,5 +352,9 @@ where
         self.visitor_counter.1.store(false, Ordering::Release);
 
         safe
+    }
+
+    fn refill(&mut self, count: usize) {
+        unimplemented!();
     }
 }

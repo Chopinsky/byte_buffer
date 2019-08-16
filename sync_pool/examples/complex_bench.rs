@@ -8,10 +8,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 use sync_pool::prelude::*;
 
-const BUF_CAP: usize = 1024;
+const TRIAL_RUNS: usize = 64;
 const TEST_SIZE: usize = 128;
-const SLEEP: u64 = 64;
+const BUF_CAP: usize = 1024;
+const BUSY_PERIOD: u64 = 64;
 const DENOMINATOR: usize = 1;
+const ASYNC_MODE: bool = true;
 
 type TestStruct = Buffer;
 static mut POOL: Option<SyncPool<TestStruct>> = None;
@@ -56,8 +58,8 @@ struct ComplexStruct {
 fn main() {
     pool_setup();
 
-    let async_mode = true;
-    let trials = 64;
+    let async_mode = ASYNC_MODE;
+    let trials = TRIAL_RUNS;
     let mut sum = 0;
 
     println!("Init len: {}", unsafe { POOL.as_ref().unwrap().len() });
@@ -100,7 +102,6 @@ fn pool_setup() {
         pool.reset_handle(sanitizer);
 
         /*
-
         // Alternatively, use an anonymous function for the same purpose. Closure can't be used as
         // a handle, though.
         pool.reset_handle(|slice: &mut [u8; BUF_CAP]| {
@@ -110,7 +111,6 @@ fn pool_setup() {
 
             println!("Byte slice cleared...");
         });
-
         */
 
         POOL.replace(pool);
@@ -130,7 +130,7 @@ fn run(alloc: bool) -> u128 {
     let send_one = thread::spawn(move || {
         for i in 0..TEST_SIZE {
             if i % DENOMINATOR == 0 {
-                thread::sleep(Duration::from_nanos(SLEEP));
+                thread::sleep(Duration::from_nanos(BUSY_PERIOD));
             }
 
             let mut data = if alloc {
@@ -155,7 +155,7 @@ fn run(alloc: bool) -> u128 {
     let send_two = thread::spawn(move || {
         for i in 0..TEST_SIZE {
             if i % DENOMINATOR == 0 {
-                thread::sleep(Duration::from_nanos(SLEEP));
+                thread::sleep(Duration::from_nanos(BUSY_PERIOD));
             }
 
             let mut data = if alloc {
@@ -196,7 +196,7 @@ fn run(alloc: bool) -> u128 {
     for i in 0..TEST_SIZE {
         // sleep a bit to create some concurrent actions
         if i % DENOMINATOR == 1 {
-            thread::sleep(Duration::from_nanos(SLEEP));
+            thread::sleep(Duration::from_nanos(BUSY_PERIOD));
         }
 
         let mut data = if alloc {

@@ -14,7 +14,7 @@ const COUNT: usize = 128;
 
 /// A shared pool, one can imagine other ways of sharing the pool concurrently, here we choose to use
 /// an unsafe version to simplify the example.
-static mut POOL: MaybeUninit<SyncPool<Box<ComplexStruct>>> = MaybeUninit::uninit();
+static mut POOL: MaybeUninit<SyncPool<ComplexStruct>> = MaybeUninit::uninit();
 
 #[derive(Default, Debug)]
 struct ComplexStruct {
@@ -29,8 +29,8 @@ struct ComplexStruct {
 
 /// Make sure we build up the pool before use
 unsafe fn pool_setup() -> (
-    Pin<&'static mut SyncPool<Box<ComplexStruct>>>,
-    Pin<&'static mut SyncPool<Box<ComplexStruct>>>,
+    Pin<&'static mut SyncPool<ComplexStruct>>,
+    Pin<&'static mut SyncPool<ComplexStruct>>,
 ) {
     POOL.as_mut_ptr().write(SyncPool::with_size(COUNT / 2));
 
@@ -74,7 +74,7 @@ fn main() {
     println!("All done...");
 }
 
-fn run(pool: &mut SyncPool<Box<ComplexStruct>>, chan: &SyncSender<Box<ComplexStruct>>, id: usize) {
+fn run(pool: &mut SyncPool<ComplexStruct>, chan: &SyncSender<Box<ComplexStruct>>, id: usize) {
     // take a pre-init struct from the pool
     let mut content = pool.get();
     content.id = id;
