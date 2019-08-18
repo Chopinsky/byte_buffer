@@ -1,10 +1,8 @@
-#![allow(unused)]
-
 use crate::bucket::*;
 use crate::utils::cpu_relax;
-use std::ops::Deref;
-use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use std::ops::Add;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Instant, Duration};
 
 const POOL_SIZE: usize = 8;
 const EXPANSION_CAP: usize = 512;
@@ -43,7 +41,7 @@ pub struct SyncPool<T> {
     /// The slots storage
     slots: Vec<Bucket2<T>>,
 
-    /// the next channel to try
+    /// the next bucket to try
     curr: AtomicUsize,
 
     /// First node: how many threads are concurrently accessing the struct:
@@ -66,10 +64,13 @@ pub struct SyncPool<T> {
 }
 
 impl<T: Default> SyncPool<T> {
+    /// Create a pool with default size of 64 pre-allocated elements in it.
     pub fn new() -> Self {
         Self::make_pool(POOL_SIZE)
     }
 
+    /// Create a `SyncPool` with pre-defined number of elements. Note that we will round-up
+    /// the size such that the total number of elements in the pool will mod to 8.
     pub fn with_size(size: usize) -> Self {
         let mut pool_size = size / SLOT_CAP;
         if pool_size < 1 {
@@ -79,14 +80,9 @@ impl<T: Default> SyncPool<T> {
         Self::make_pool(pool_size)
     }
 
-    pub fn len(&self) -> usize {
-        self.slots.iter().fold(0, |sum, item| sum + item.size_hint())
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
+    /// Try to obtain a pre-allocated element from the pool. This method will always succeed even if
+    /// the pool is empty or not available for anyone to access, and in this case, a new boxed-element
+    /// will be created.
     pub fn get(&mut self) -> Box<T> {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
@@ -145,7 +141,10 @@ impl<T: Default> SyncPool<T> {
         Default::default()
     }
 
-    pub fn put(&mut self, val: Box<T>) {
+    /// Try to return an element to the `SyncPool`. If succeed, we will return `None` to indicate that
+    /// the value has been placed in an empty slot; otherwise, we will return `Option<Box<T>>` such
+    /// that the caller can decide if the element shall be just discarded, or try put it back again.
+    pub fn put(&mut self, val: Box<T>) -> Option<Box<T>> {
         // update user count
         let _guard = VisitorGuard::register(&self.visitor_counter);
 
@@ -169,7 +168,7 @@ impl<T: Default> SyncPool<T> {
                 slot.release(i, val, self.reset_handle);
                 slot.leave(i as u16);
 
-                return;
+                return None;
             }
 
 /*            if slot.access(false) {
@@ -180,7 +179,7 @@ impl<T: Default> SyncPool<T> {
                 slot.release(val, self.reset_handle.load(Ordering::Acquire));
                 slot.leave();
 
-                return;
+                return true;
             }*/
 
             // hold off a bit to reduce contentions
@@ -192,7 +191,7 @@ impl<T: Default> SyncPool<T> {
 
             // we've finished 1 loop but not finding a value to extract, quit
             if trials == 0 {
-                break;
+                return Some(val);
             }
         }
     }
@@ -256,10 +255,19 @@ impl<T> Drop for SyncPool<T> {
 
 pub trait PoolState {
     fn expansion_enabled(&self) -> bool;
+
     fn miss_count(&self) -> usize;
+
+    fn capacity(&self) -> usize;
+
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
-impl<T> PoolState for SyncPool<T> {
+impl<T: Default> PoolState for SyncPool<T> {
     fn expansion_enabled(&self) -> bool {
         let configure = self.configure.load(Ordering::SeqCst);
         configure & CONFIG_ALLOW_EXPANSION > 0
@@ -268,27 +276,66 @@ impl<T> PoolState for SyncPool<T> {
     fn miss_count(&self) -> usize {
         self.miss_count.load(Ordering::Acquire)
     }
+
+    fn capacity(&self) -> usize {
+        self.slots.len() * SLOT_CAP
+    }
+
+    fn len(&self) -> usize {
+        self.slots.iter().fold(0, |sum, item| sum + item.size_hint())
+    }
 }
 
 pub trait PoolManager<T> {
     fn reset_handle(&mut self, handle: fn(&mut T)) -> &mut Self;
     fn allow_expansion(&mut self, allow: bool) -> &mut Self;
     fn expand(&mut self, additional: usize, block: bool) -> bool;
-    fn refill(&mut self, count: usize);
+    fn refill(&mut self, count: usize) -> usize;
 }
 
-impl<T> PoolManager<T> for SyncPool<T>
+/// The pool manager that provide many useful utilities to keep the SyncPool close to the needs of
+/// the caller program.
+impl<T: Default> PoolManager<T> for SyncPool<T>
 where
     T: Default,
 {
+    /// Set or update the reset handle. If set, the reset handle will be invoked every time an element
+    /// has been returned back to the pool (i.e. calling the `put` method), regardless of if the element
+    /// is created by the pool or not.
     fn reset_handle(&mut self, handle: fn(&mut T)) -> &mut Self {
-        let h = Box::new(handle);
+        // busy waiting ... for the first chance a barrier owned by someone else is lowered
+        let mut count: usize = 8;
+        let timeout = Instant::now().add(Duration::from_millis(16));
+
+        loop {
+            match self
+                .visitor_counter
+                .1
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+            {
+                Ok(_) => break,
+                Err(_) => {
+                    cpu_relax(count);
+
+                    if count > 4 {
+                        // update the counter (and the busy wait period)
+                        count -= 1;
+                    } else if Instant::now() > timeout {
+                        // don't block for more than 16ms
+                        return self;
+                    }
+                }
+            }
+        };
+
         self.reset_handle
             .replace(handle);
 
+        self.visitor_counter.1.store(false, Ordering::SeqCst);
         self
     }
 
+    /// Set or update the settings that if we will allow the `SyncPool` to be expanded.
     fn allow_expansion(&mut self, allow: bool) -> &mut Self {
         if !(self.expansion_enabled() ^ allow) {
             // not flipping the configuration, return
@@ -299,6 +346,16 @@ where
         self
     }
 
+    /// Try to expand the `SyncPool` and add more elements to it. Usually invoke this API only when
+    /// the caller is certain that the pool is under pressure, and that a short block to the access
+    /// of the pool won't cause serious issues, since the function will block the current caller's
+    /// thread until it's finished (i.e. get the opportunity to raise the writer's barrier and wait
+    /// everyone to leave).
+    ///
+    /// If we're unable to expand the pool, it's due to one of the following reasons: 1) someone has
+    /// already raised the writer's barrier and is likely modifying the pool, we will leave immediately,
+    /// and it's up to the caller if they want to try again; 2) we've waited too long but still couldn't
+    /// obtain an exclusive access to the pool, and similar to reason 1), we will quit now.
     fn expand(&mut self, additional: usize, block: bool) -> bool {
         // if the pool isn't allowed to expand, just return
         if !self.expansion_enabled() {
@@ -322,7 +379,7 @@ where
         }
 
         // busy waiting ... for all visitors to leave
-        let mut count: usize = 0;
+        let mut count: usize = 8;
         let safe = loop {
             match self
                 .visitor_counter
@@ -332,9 +389,10 @@ where
                 Ok(_) => break true,
                 Err(_) => {
                     cpu_relax(2);
-                    count += 1;
 
-                    if count > 8 && !block {
+                    if count > 2 {
+                        count -= 1;
+                    } else if !block {
                         break false;
                     }
                 }
@@ -354,7 +412,54 @@ where
         safe
     }
 
-    fn refill(&mut self, count: usize) {
-        unimplemented!();
+    /// Due to contentious access to the pool, sometimes the `put` action could not finish and return
+    /// the element to the pool successfully. Overtime, this could cause the number of elements in the
+    /// pool to dwell. This would only happen slowly if we're running a very contentious multithreading
+    /// program, but it surely could happen. If the caller detects such situation, they can invoke the
+    /// `refill` API and try to refill the pool with elements.
+    ///
+    /// We will try to refill as many elements as requested
+    fn refill(&mut self, additional: usize) -> usize {
+        let cap = self.capacity();
+        let empty_slots = cap - self.len();
+
+        if empty_slots == 0 {
+            return 0;
+        }
+
+        let quota = if additional > empty_slots {
+            empty_slots
+        } else {
+            additional
+        };
+
+        let mut count = 0;
+        let timeout = Instant::now().add(Duration::from_millis(16));
+
+        // try to put `quota` number of elements into the pool
+        while count < quota {
+            let mut val = Box::new(Default::default());
+            let mut runs = 0;
+
+            // retry to put the allocated element into the pool.
+            while let Some(ret) = self.put(val) {
+                val = ret;
+                runs += 1;
+
+                // timeout
+                if Instant::now() > timeout {
+                    return count;
+                }
+
+                // check the pool length for every 4 failed attempts to put the element into the pool.
+                if runs % 4 == 0 && self.len() == cap {
+                    return count;
+                }
+            }
+
+            count += 1;
+        }
+
+        count
     }
 }
