@@ -5,6 +5,7 @@ use std::sync::atomic;
 
 const GET_MASK: u16 = 0b1010_1010_1010_1010;
 const PUT_MASK: u16 = 0b1111_1111_1111_1111;
+const FULL_FLAG: u16 = 0b0101_0101_0101_0101;
 
 #[inline(always)]
 pub(crate) fn cpu_relax(count: usize) {
@@ -13,10 +14,54 @@ pub(crate) fn cpu_relax(count: usize) {
     }
 }
 
+pub(crate) fn check_len(src: u16) -> usize {
+    match src & FULL_FLAG {
+        0 => 0,
+        FULL_FLAG => 8,
+        mut base => {
+            let mut count = 0;
+
+            while base > 0 {
+                if base & 1 == 1 {
+                    count += 1;
+                }
+
+                base >>= 2;
+            }
+
+            count
+        },
+    }
+}
+
 /// Assuming we have 8 elements per slot, otherwise must update the assumption.
 pub(crate) fn enter(src: u16, get: bool) -> Result<u16, ()> {
-    let mut pos = 0;
+    // not going to meet the needs, early termination.
+    if (get && src == 0) || (!get && src == FULL_FLAG) {
+        return Err(());
+    }
+
     let mut base = if get { src ^ GET_MASK } else { src ^ PUT_MASK };
+//    let mut pos = 0;
+
+    let mut pos: u16 = {
+        // a little trick: pre-calculate the starting point for finding the location
+        let val = (base & PUT_MASK).trailing_zeros() as u16;
+
+        // if bit 15 (or above) is 0, then we won't find a location in this bucket, skip the
+        // remainder logic/loop.
+        if val > 14 {
+            return Err(());
+        }
+
+        if val % 2 == 1 {
+            base >>= val + 1;
+            (val + 1) / 2
+        } else {
+            base >>= val;
+            val / 2
+        }
+    };
 
     while base > 0 {
         if base & 0b11 == 0b11 {

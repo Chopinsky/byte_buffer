@@ -11,7 +11,7 @@ use syncpool::prelude::*;
 const TRIAL_RUNS: usize = 64;
 const TEST_SIZE: usize = 128;
 const BUF_CAP: usize = 1024;
-const BUSY_PERIOD: u64 = 64;
+const BUSY_PERIOD: u64 = 16;
 const DENOMINATOR: usize = 1;
 const ASYNC_MODE: bool = true;
 
@@ -83,6 +83,7 @@ fn main() {
         sum += res;
 
         println!(">>> Trial: {}; Advance: {} us <<<", i, res);
+//        println!("Remainder len: {}", unsafe { POOL.as_ref().unwrap().len() });
     }
 
     println!("Remainder len: {}", unsafe { POOL.as_ref().unwrap().len() });
@@ -181,7 +182,7 @@ fn run(alloc: bool) -> u128 {
         thread::sleep(Duration::from_micros(5));
 
         while let Ok(arr) = rx.recv() {
-            //            assert_eq!(arr.len(), BUF_CAP);
+//            assert_eq!(arr.len(), BUF_CAP);
 
             if !alloc {
                 unsafe {

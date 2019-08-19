@@ -150,10 +150,8 @@ impl<T: Default> SyncPool<T> {
 
         // start from where we're left
         let cap = self.slots.len();
-        let origin: usize = self.curr.load(Ordering::Acquire) % cap;
-
-        let mut pos = origin;
         let mut trials = 2 * cap;
+        let mut pos: usize = self.curr.load(Ordering::Acquire) % cap;
 
         loop {
             // check this slot
@@ -455,6 +453,9 @@ where
                 if runs % 4 == 0 && self.len() == cap {
                     return count;
                 }
+
+                // relax a bit
+                cpu_relax(if runs < 16 { runs / 2 } else { 8 });
             }
 
             count += 1;

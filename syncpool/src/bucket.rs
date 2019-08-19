@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use crate::utils::{cpu_relax, enter};
+use crate::utils::{cpu_relax, check_len, enter};
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
@@ -189,15 +189,15 @@ impl<T: Default> Bucket2<T> {
     /// Obtain the number of available elements in this bucket. The size is volatile if the API is
     /// accessed concurrently with read/write, so the
     pub(crate) fn size_hint(&self) -> usize {
-        //        println!("{:#018b}", self.bitmap.load(Ordering::Acquire));
-        self.len.load(Ordering::Acquire) % (SLOT_CAP + 1)
+//        self.len.load(Ordering::Acquire) % (SLOT_CAP + 1)
+        check_len(self.bitmap.load(Ordering::Acquire))
     }
 
     /// Try to locate a position where we can fulfil the request -- either grab an element from the
     /// bucket, or put an element back into the bucket. If such a request can't be done, we will
     /// return error.
     pub(crate) fn access(&self, get: bool) -> Result<usize, ()> {
-        // pre-checkout, make sure the len is in post-action state so it can reject future attempts
+/*        // pre-checkout, make sure the len is in post-action state so it can reject future attempts
         // if it's unlikely to succeed in this slot.
         let curr_len = if get {
             self.len.fetch_sub(1, Ordering::AcqRel)
@@ -209,9 +209,10 @@ impl<T: Default> Bucket2<T> {
         // overflow, still way off the roof and a proof of not doing well.
         if curr_len > SLOT_CAP || (get && curr_len == 0) {
             return self.access_failure(get);
-        }
+        }*/
 
-        let mut trials: usize = 2;
+        // try 4 times on this slot if the desired slot happens to be taken ...
+        let mut trials: usize = 4;
         while trials > 0 {
             // init try
             let (pos, mask) = match enter(self.bitmap.load(Ordering::Acquire), get) {
@@ -230,7 +231,7 @@ impl<T: Default> Bucket2<T> {
             }
 
             // otherwise, try again after some wait
-            cpu_relax(4 * trials);
+            cpu_relax(2 * trials);
             trials -= 1;
         }
 
@@ -301,11 +302,11 @@ impl<T: Default> Bucket2<T> {
 
     #[inline]
     fn access_failure(&self, get: bool) -> Result<usize, ()> {
-        if get {
+/*        if get {
             self.len.fetch_add(1, Ordering::AcqRel);
         } else {
             self.len.fetch_sub(1, Ordering::AcqRel);
-        }
+        }*/
 
         Err(())
     }
