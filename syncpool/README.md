@@ -1,6 +1,7 @@
 [SyncPool][docsrs]
 ======================
 
+
 [![SyncPool on crates.io][cratesio-image]][cratesio]
 [![SyncPool on docs.rs][docsrs-image]][docsrs]
 
@@ -8,6 +9,8 @@
 [cratesio-image]: https://img.shields.io/crates/v/syncpool.svg
 [docsrs-image]: https://docs.rs/syncpool/badge.svg
 [docsrs]: https://docs.rs/syncpool
+
+A simple and thread-safe objects pool to reuse heavy objects placed in the heap.
 
 ## What this crate is for
 Inspired by Go's `sync.Pool` module, this crate provides a multithreading-friendly 
@@ -44,12 +47,11 @@ use std::collections::HashMap;
 use std::sync::mpsc::{self, SyncSender};
 use std::thread;
 use std::time::Duration;
-
 use syncpool::prelude::*;
 
-// For simplicity and illustration, here we use the most simple but unsafe way to 
-// define the shared pool: make it static mut. Other safer implementation exists 
-// but may require some detour depending on the business logic and project structure.
+/// For simplicity and illustration, here we use the most simple but unsafe way to 
+/// define the shared pool: make it static mut. Other safer implementation exists 
+/// but may require some detour depending on the business logic and project structure.
 static mut POOL: Option<SyncPool<ComplexStruct>> = None;
 
 /// Number of producers that runs in this test
