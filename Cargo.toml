@@ -12,7 +12,7 @@ version = "0.1.1"
 path = "./byte_buffer"
 
 [dependencies.syncpool]
-version = "0.1.0"
+version = "0.1.2"
 path = "./syncpool"
 
 [workspace]
