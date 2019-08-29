@@ -36,14 +36,22 @@ pub(crate) fn check_len(src: u16) -> usize {
 
 /// Assuming we have 8 elements per slot, otherwise must update the assumption.
 pub(crate) fn enter(src: u16, get: bool) -> Result<u16, ()> {
-    // not going to meet the needs, early termination.
-    if (get && src == 0) || (!get && src == FULL_FLAG) {
-        return Err(());
-    }
+    // get the base bits to check on. If we're not going to meet the needs, terminate early.
+    let mut base = if get {
+        if src == 0 {
+            return Err(());
+        }
 
-    let mut base = if get { src ^ GET_MASK } else { src ^ PUT_MASK };
-//    let mut pos = 0;
+        src ^ GET_MASK
+    } else {
+        if src == FULL_FLAG {
+            return Err(());
+        }
 
+        src ^ PUT_MASK
+    };
+
+    // find the starting position for the spot check
     let mut pos: u16 = {
         // a little trick: pre-calculate the starting point for finding the location
         let val = (base & PUT_MASK).trailing_zeros() as u16;

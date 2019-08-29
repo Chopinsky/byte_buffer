@@ -146,10 +146,13 @@ impl<T: Default> Bucket<T> {
 }
 
 pub(crate) struct Bucket2<T> {
-    /// the actual data store
+    /// The actual data store. Data are stored in heap and not managed by the runtime, so we must
+    /// restore them and drop the data when the bucket is dropped.
     slot: [*mut T; SLOT_CAP],
 
-    /// the current ready-to-use slot index, always offset by 1 to the actual index
+    /// the current ready-to-use slot count, always offset by 1 to the actual index. This may not be
+    /// a real-time reflection of how many elements are actually in the bucket, especially if other
+    /// threads are actively interact with the sync pool.
     len: AtomicUsize,
 
     /// The bitmap of the slots. The implementation rely on the assumption that each bucket only contains
@@ -189,37 +192,37 @@ impl<T: Default> Bucket2<T> {
     /// Obtain the number of available elements in this bucket. The size is volatile if the API is
     /// accessed concurrently with read/write, so the
     pub(crate) fn size_hint(&self) -> usize {
-//        self.len.load(Ordering::Acquire) % (SLOT_CAP + 1)
-        check_len(self.bitmap.load(Ordering::Acquire))
+        self.len.load(Ordering::Acquire) % (SLOT_CAP + 1)
+//        check_len(self.bitmap.load(Ordering::Acquire))
     }
 
     /// Try to locate a position where we can fulfil the request -- either grab an element from the
     /// bucket, or put an element back into the bucket. If such a request can't be done, we will
     /// return error.
     pub(crate) fn access(&self, get: bool) -> Result<usize, ()> {
-/*        // pre-checkout, make sure the len is in post-action state so it can reject future attempts
-        // if it's unlikely to succeed in this slot.
+        // register intentions first, make sure the len is in post-action state so it can reject
+        // future or concurrent attempts if it's unlikely to succeed in this slot.
         let curr_len = if get {
-            self.len.fetch_sub(1, Ordering::AcqRel)
+            self.len.fetch_sub(1, Ordering::Relaxed)
         } else {
-            self.len.fetch_add(1, Ordering::AcqRel)
+            self.len.fetch_add(1, Ordering::Relaxed)
         };
 
         // oops, last op blew off the roof, back off mate. Note that (0 - 1 == MAX_USIZE) for stack
         // overflow, still way off the roof and a proof of not doing well.
         if curr_len > SLOT_CAP || (get && curr_len == 0) {
             return self.access_failure(get);
-        }*/
+        }
 
-        // try 4 times on this slot if the desired slot happens to be taken ...
+        // try 2 times on this slot if the desired slot happens to be taken ...
         let mut trials: usize = 4;
         while trials > 0 {
+            trials -= 1;
+
             // init try
             let (pos, mask) = match enter(self.bitmap.load(Ordering::Acquire), get) {
                 Ok(pos) => (pos, 0b10 << (2 * pos)),
-                Err(()) => {
-                    return self.access_failure(get);
-                }
+                Err(()) => continue,
             };
 
             // main loop to try to update the bitmap
@@ -230,9 +233,9 @@ impl<T: Default> Bucket2<T> {
                 return Ok(pos as usize);
             }
 
-            // otherwise, try again after some wait
-            cpu_relax(2 * trials);
-            trials -= 1;
+            // otherwise, try again after some wait. The earliest registered gets some favor by
+            // checking and trying to lodge a position more frequently than the later ones.
+            cpu_relax(trials + 1);
         }
 
         self.access_failure(get)
@@ -302,13 +305,22 @@ impl<T: Default> Bucket2<T> {
 
     #[inline]
     fn access_failure(&self, get: bool) -> Result<usize, ()> {
-/*        if get {
+        if get {
             self.len.fetch_add(1, Ordering::AcqRel);
         } else {
             self.len.fetch_sub(1, Ordering::AcqRel);
-        }*/
+        }
 
         Err(())
+    }
+}
+
+impl<T> Drop for Bucket2<T> {
+    fn drop(&mut self) {
+        for item in self.slot.iter_mut() {
+            unsafe { ptr::drop_in_place(*item); }
+            *item = ptr::null_mut();
+        }
     }
 }
 
