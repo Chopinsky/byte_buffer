@@ -89,7 +89,7 @@ impl<T: Default> SyncPool<T> {
 
         // start from where we're left
         let cap = self.slots.len();
-        let origin: usize = self.curr.load(1, Ordering::AcqRel) % cap;
+        let origin: usize = self.curr.load(Ordering::AcqRel) % cap;
 
         let mut pos = origin;
         let mut trials = cap;
@@ -151,7 +151,7 @@ impl<T: Default> SyncPool<T> {
         // start from where we're left
         let cap = self.slots.len();
         let mut trials = 2 * cap;
-        let mut pos: usize = self.curr.load(1, Ordering::Acquire) % cap;
+        let mut pos: usize = self.curr.load(Ordering::Acquire) % cap;
 
         loop {
             // check this slot
