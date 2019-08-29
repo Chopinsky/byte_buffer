@@ -2,14 +2,14 @@
 
 use std::io::ErrorKind;
 use std::str;
-use std::sync::{Once, ONCE_INIT};
+use std::sync::{Once};
 use std::thread;
 use std::vec;
 use crate::channel::{self as channel};
 use crate::buffer::{PoolManagement, BufferPool};
 use crate::utils::*;
 
-static ONCE: Once = ONCE_INIT;
+static ONCE: Once = Once::new();
 
 pub struct ByteBuffer;
 

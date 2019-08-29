@@ -25,7 +25,7 @@
 //!   let mut buffer = ByteBuffer::slice();
 //!
 //!   // Fill the buffer with some byte data
-//!   io::repeat(0b101).read_exact(buffer.as_writable().unwrap()).unwrap();
+//!   io::repeat(0b101).read_exact(buffer.as_writable()).unwrap();
 //!
 //!   // Read the data out. The buffer will be released back to the pool after going out of the scope
 //!   assert_eq!(buffer.as_readable().unwrap(), [0b101, 0b101, 0b101]);
