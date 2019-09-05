@@ -2,7 +2,7 @@ use crate::bucket::*;
 use crate::utils::cpu_relax;
 use std::ops::Add;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 const POOL_SIZE: usize = 8;
 const EXPANSION_CAP: usize = 512;
@@ -89,7 +89,7 @@ impl<T: Default> SyncPool<T> {
 
         // start from where we're left
         let cap = self.slots.len();
-        let origin: usize = self.curr.load(Ordering::AcqRel) % cap;
+        let origin: usize = self.curr.load(Ordering::Acquire) % cap;
 
         let mut pos = origin;
         let mut trials = cap;
@@ -104,7 +104,7 @@ impl<T: Default> SyncPool<T> {
                 let checkout = slot.checkout(i);
                 slot.leave(i as u16);
 
-/*            if slot.access(true) {
+                /*            if slot.access(true) {
                 // try to checkout one slot
                 let checkout = slot.checkout();
                 slot.leave();*/
@@ -169,7 +169,7 @@ impl<T: Default> SyncPool<T> {
                 return None;
             }
 
-/*            if slot.access(false) {
+            /*            if slot.access(false) {
                 // now we're locked, get the val and update internal states
                 self.curr.store(pos, Ordering::Release);
 
@@ -204,15 +204,15 @@ impl<T: Default> SyncPool<T> {
             reset_handle: None,
         };
 
-        pool.add_slots(size, true);
+        pool.add_slots(size, Some(|| Default::default()));
         pool
     }
 
     #[inline]
-    fn add_slots(&mut self, count: usize, fill: bool) {
+    fn add_slots(&mut self, count: usize, filler: Option<fn() -> T>) {
         (0..count).for_each(|_| {
-//            self.slots.push(Bucket::new(fill));
-            self.slots.push(Bucket2::new(fill));
+            // self.slots.push(Bucket::new(fill));
+            self.slots.push(Bucket2::new(filler));
         });
     }
 
@@ -280,7 +280,9 @@ impl<T: Default> PoolState for SyncPool<T> {
     }
 
     fn len(&self) -> usize {
-        self.slots.iter().fold(0, |sum, item| sum + item.size_hint())
+        self.slots
+            .iter()
+            .fold(0, |sum, item| sum + item.size_hint())
     }
 }
 
@@ -306,11 +308,12 @@ where
         let timeout = Instant::now().add(Duration::from_millis(16));
 
         loop {
-            match self
-                .visitor_counter
-                .1
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
-            {
+            match self.visitor_counter.1.compare_exchange(
+                false,
+                true,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
                 Ok(_) => break,
                 Err(_) => {
                     cpu_relax(count);
@@ -324,10 +327,9 @@ where
                     }
                 }
             }
-        };
+        }
 
-        self.reset_handle
-            .replace(handle);
+        self.reset_handle.replace(handle);
 
         self.visitor_counter.1.store(false, Ordering::SeqCst);
         self
@@ -399,7 +401,7 @@ where
 
         if safe {
             // update the slots by pushing `additional` slots
-            self.add_slots(additional, true);
+            self.add_slots(additional, Some(|| Default::default()));
             self.miss_count.store(0, Ordering::Release);
         }
 

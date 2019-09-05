@@ -1,13 +1,13 @@
 #![allow(dead_code)]
 
+use crate::buffer::{BufferPool, PoolManagement};
+use crate::channel::{self as channel};
+use crate::utils::*;
 use std::io::ErrorKind;
 use std::str;
-use std::sync::{Once};
+use std::sync::Once;
 use std::thread;
 use std::vec;
-use crate::channel::{self as channel};
-use crate::buffer::{PoolManagement, BufferPool};
-use crate::utils::*;
 
 static ONCE: Once = Once::new();
 
@@ -95,7 +95,7 @@ impl BufferSlice {
                 }
 
                 unreachable!();
-            },
+            }
         }
     }
 
@@ -115,7 +115,7 @@ impl BufferSlice {
                 }
 
                 unreachable!();
-            },
+            }
         }
     }
 
@@ -129,7 +129,7 @@ impl BufferSlice {
             Err(e) => {
                 eprintln!("Failed to read the buffer: {:?}...", e);
                 None
-            },
+            }
         }
     }
 
@@ -143,7 +143,7 @@ impl BufferSlice {
             Err(e) => {
                 eprintln!("Failed to read the buffer: {:?}...", e);
                 None
-            },
+            }
         }
     }
 
@@ -163,7 +163,7 @@ impl BufferSlice {
         BufferPool::reset_slice(self.id);
 
         if let Some(fb) = self.fallback.as_mut() {
-            fb.iter_mut().for_each(|val| *val = 0 );
+            fb.iter_mut().for_each(|val| *val = 0);
         }
     }
 
@@ -190,9 +190,10 @@ impl BufferSlice {
 impl Drop for BufferSlice {
     fn drop(&mut self) {
         if self.id == 0 && self.fallback.is_some() {
-            BufferPool::exec(
-                BufOp::ReleaseAndExtend(self.fallback.take().unwrap(), self.dirty)
-            );
+            BufferPool::exec(BufOp::ReleaseAndExtend(
+                self.fallback.take().unwrap(),
+                self.dirty,
+            ));
         } else {
             BufferPool::reset_and_release(self.id, self.dirty);
         }

@@ -8,9 +8,7 @@ pub(crate) fn lock() -> Result<(), ErrorKind> {
     let mut count = 1;
 
     loop {
-        if let Ok(true) = LOCK.compare_exchange(
-            false, true, Ordering::Acquire, Ordering::Relaxed
-        ) {
+        if let Ok(true) = LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed) {
             break;
         }
 

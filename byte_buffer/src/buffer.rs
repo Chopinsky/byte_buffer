@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 
+use crate::channel::{Receiver, Sender};
+use crate::lock::{lock, unlock};
+use crate::utils::*;
 use std::io::ErrorKind;
 use std::sync::{atomic::AtomicBool, atomic::AtomicUsize, atomic::Ordering};
 use std::vec;
-use crate::channel::{Sender, Receiver};
-use crate::lock::{lock, unlock};
-use crate::utils::*;
 
 const DEFAULT_GROWTH: usize = 4;
 const DEFAULT_CAPACITY: usize = 512;
@@ -22,7 +22,12 @@ pub(crate) struct BufferPool {
 }
 
 pub(crate) trait PoolManagement {
-    fn make(store: Vec<Vec<u8>>, pool: Vec<usize>, slice_capacity: usize, worker_chan: Sender<WorkerOp>);
+    fn make(
+        store: Vec<Vec<u8>>,
+        pool: Vec<usize>,
+        slice_capacity: usize,
+        worker_chan: Sender<WorkerOp>,
+    );
     fn default_capacity() -> usize;
     fn slice_stat(id: usize, query: SliceStatusQuery) -> usize;
     fn handle_work(rx: Receiver<WorkerOp>);
@@ -39,7 +44,7 @@ impl PoolManagement for BufferPool {
         store: Vec<Vec<u8>>,
         pool: Vec<usize>,
         slice_capacity: usize,
-        worker_chan: Sender<WorkerOp>
+        worker_chan: Sender<WorkerOp>,
     ) {
         unsafe {
             if store.len() > SIZE_CAP.load(Ordering::SeqCst) {
@@ -81,11 +86,10 @@ impl PoolManagement for BufferPool {
             match rx.recv() {
                 Ok(message) => {
                     match message {
-                        WorkerOp::Cleanup(id, dirty) =>
-                            BufferPool::exec(BufOp::Release(id, dirty)),
+                        WorkerOp::Cleanup(id, dirty) => BufferPool::exec(BufOp::Release(id, dirty)),
                         WorkerOp::Shutdown => return,
                     };
-                },
+                }
                 Err(_) => return,
             };
         }
@@ -106,18 +110,18 @@ impl PoolManagement for BufferPool {
                         //TODO: try extend, and if failed, generate fallback
                         result = Some(buf.extend(DEFAULT_GROWTH));
                     }
-                },
+                }
                 BufOp::Release(id, dirty) => {
                     buf.release(id);
 
                     if dirty {
                         buf.reset(id);
                     }
-                },
+                }
                 BufOp::Extend(count) => {
                     //TODO: try extend, and if failed, fallback to None
                     result = Some(buf.extend(count));
-                },
+                }
                 BufOp::ReleaseAndExtend(vec, dirty) => {
                     if buf.store.len() < unsafe { SIZE_CAP.load(Ordering::SeqCst) } {
                         let id = buf.store.len();
@@ -186,7 +190,9 @@ impl PoolManagement for BufferPool {
     }
 
     fn set_size_limit(limit: usize) {
-        unsafe { SIZE_CAP.store(limit, Ordering::SeqCst); }
+        unsafe {
+            SIZE_CAP.store(limit, Ordering::SeqCst);
+        }
     }
 }
 
@@ -257,7 +263,7 @@ impl PoolOps for BufferPool {
 
         let end = self.store[id].capacity();
         (start..end).for_each(|_| {
-           self.store[id].push(0);
+            self.store[id].push(0);
         });
     }
 }

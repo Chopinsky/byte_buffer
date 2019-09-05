@@ -30,7 +30,7 @@ pub(crate) fn check_len(src: u16) -> usize {
             }
 
             count
-        },
+        }
     }
 }
 

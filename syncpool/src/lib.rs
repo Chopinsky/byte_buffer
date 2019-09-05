@@ -114,13 +114,18 @@
 //! folder.
 //!
 
+mod boxed;
 mod bucket;
 mod pool;
 mod utils;
 
-pub use crate::pool::{PoolManager, PoolState, SyncPool};
+pub use crate::{
+    boxed::{default_box, make_box, raw_box, raw_box_zeroed},
+    pool::{PoolManager, PoolState, SyncPool},
+};
 
 pub mod prelude {
+    pub use crate::boxed::*;
     pub use crate::{PoolManager, PoolState, SyncPool};
 }
 

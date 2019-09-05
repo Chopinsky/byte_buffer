@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use crate::utils::{cpu_relax, check_len, enter};
+use crate::utils::{check_len, cpu_relax, enter};
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
@@ -19,15 +19,15 @@ pub(crate) struct Bucket<T> {
     access: AtomicBool,
 }
 
-impl<T: Default> Bucket<T> {
-    pub(crate) fn new(fill: bool) -> Self {
+impl<T> Bucket<T> {
+    pub(crate) fn new(filler: Option<fn() -> T>) -> Self {
         // create the placeholder
         let mut slice: [Option<T>; SLOT_CAP] = Default::default();
 
         // fill the placeholder if required
-        if fill {
+        if let Some(handle) = filler.as_ref() {
             for item in slice.iter_mut() {
-                item.replace(Default::default());
+                item.replace(handle());
             }
         }
 
@@ -121,28 +121,28 @@ impl<T: Default> Bucket<T> {
         drop(val);
     }
 
-/*
-    fn swap_in(&mut self, index: usize, content: T) {
-        let src = &mut self.slot[index] as *mut Option<T>;
-        unsafe {
-            src.write(Some(content));
+    /*
+        fn swap_in(&mut self, index: usize, content: T) {
+            let src = &mut self.slot[index] as *mut Option<T>;
+            unsafe {
+                src.write(Some(content));
+            }
         }
-    }
 
-    fn swap_out(&mut self, index: usize) -> T {
-        let src = &mut self.slot[index] as *mut Option<T>;
+        fn swap_out(&mut self, index: usize) -> T {
+            let src = &mut self.slot[index] as *mut Option<T>;
 
-        unsafe {
-            // save off the old values
-            let val = ptr::read(src).unwrap_or_default();
+            unsafe {
+                // save off the old values
+                let val = ptr::read(src).unwrap_or_default();
 
-            // swap values
-            src.write(None);
+                // swap values
+                src.write(None);
 
-            val
+                val
+            }
         }
-    }
-*/
+    */
 }
 
 pub(crate) struct Bucket2<T> {
@@ -165,18 +165,18 @@ pub(crate) struct Bucket2<T> {
     bitmap: AtomicU16,
 }
 
-impl<T: Default> Bucket2<T> {
+impl<T> Bucket2<T> {
     /// Instantiate the bucket and set initial values. If we want to pre-fill the slots, we will also
     /// make sure the bitmap is updated as well.
-    pub(crate) fn new(fill: bool) -> Self {
+    pub(crate) fn new(filler: Option<fn() -> T>) -> Self {
         // create the placeholder
         let mut slice: [*mut T; SLOT_CAP] = [ptr::null_mut(); SLOT_CAP];
         let mut bitmap: u16 = 0;
 
         // fill the slots and update the bitmap
-        if fill {
+        if let Some(handle) = filler.as_ref() {
             for (i, item) in slice.iter_mut().enumerate() {
-                *item = Box::into_raw(Box::new(Default::default()));
+                *item = Box::into_raw(Box::new(handle()));
                 bitmap |= 1 << (2 * i as u16);
             }
         }
@@ -193,7 +193,7 @@ impl<T: Default> Bucket2<T> {
     /// accessed concurrently with read/write, so the
     pub(crate) fn size_hint(&self) -> usize {
         self.len.load(Ordering::Acquire) % (SLOT_CAP + 1)
-//        check_len(self.bitmap.load(Ordering::Acquire))
+        //        check_len(self.bitmap.load(Ordering::Acquire))
     }
 
     /// Try to locate a position where we can fulfil the request -- either grab an element from the
@@ -290,7 +290,7 @@ impl<T: Default> Bucket2<T> {
     /// access has been acquired previously
     pub(crate) fn release(&mut self, pos: usize, mut val: Box<T>, reset: Option<fn(&mut T)>) {
         // check if the slot has already been occupied (unlikely but still)
-        if pos >= SLOT_CAP  || !self.slot[pos].is_null() {
+        if pos >= SLOT_CAP || !self.slot[pos].is_null() {
             return;
         }
 
@@ -318,7 +318,9 @@ impl<T: Default> Bucket2<T> {
 impl<T> Drop for Bucket2<T> {
     fn drop(&mut self) {
         for item in self.slot.iter_mut() {
-            unsafe { ptr::drop_in_place(*item); }
+            unsafe {
+                ptr::drop_in_place(*item);
+            }
             *item = ptr::null_mut();
         }
     }

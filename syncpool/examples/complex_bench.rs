@@ -83,7 +83,7 @@ fn main() {
         sum += res;
 
         println!(">>> Trial: {}; Advance: {} us <<<", i, res);
-//        println!("Remainder len: {}", unsafe { POOL.as_ref().unwrap().len() });
+        //        println!("Remainder len: {}", unsafe { POOL.as_ref().unwrap().len() });
     }
 
     println!("Remainder len: {}", unsafe { POOL.as_ref().unwrap().len() });
@@ -150,7 +150,7 @@ fn run(alloc: bool) -> u128 {
             tx_clone.try_send(data).unwrap_or_default();
         }
 
-//        println!("Send one done...");
+        //        println!("Send one done...");
     });
 
     let send_two = thread::spawn(move || {
@@ -175,14 +175,14 @@ fn run(alloc: bool) -> u128 {
             tx.try_send(data).unwrap_or_default();
         }
 
-//        println!("Send two done...");
+        //        println!("Send two done...");
     });
 
     let recv_one = thread::spawn(move || {
         thread::sleep(Duration::from_micros(5));
 
         while let Ok(arr) = rx.recv() {
-//            assert_eq!(arr.len(), BUF_CAP);
+            //            assert_eq!(arr.len(), BUF_CAP);
 
             if !alloc {
                 unsafe {
@@ -191,7 +191,7 @@ fn run(alloc: bool) -> u128 {
             }
         }
 
-//        println!("Recv one done...");
+        //        println!("Recv one done...");
     });
 
     for i in 0..TEST_SIZE {
@@ -206,7 +206,7 @@ fn run(alloc: bool) -> u128 {
             unsafe { POOL.as_mut().unwrap().get() }
         };
 
-//        assert!(data.id == 21 || data.id == 0, "Wrong id: {}", data.id);
+        //        assert!(data.id == 21 || data.id == 0, "Wrong id: {}", data.id);
         assert_ne!(data.id, 42);
         data.id = 42;
 
@@ -219,7 +219,7 @@ fn run(alloc: bool) -> u128 {
         }
     }
 
-//    println!("Main loop done...");
+    //    println!("Main loop done...");
 
     send_one.join().unwrap_or_default();
     send_two.join().unwrap_or_default();

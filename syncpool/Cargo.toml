@@ -1,14 +1,13 @@
 [package]
 name = "syncpool"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Jacob Zuo <chopinsky@live.com>"]
 description = "A thread-friendly library for recycle of heavy and heap-based objects to reduce allocation and memory pressure"
+keywords = ["sync.Pool", "lock-free", "memory safety", "stackless"]
 edition = "2018"
 readme = "README.md"
 license = "MIT"
 documentation = "https://docs.rs/syncpool/"
 repository = "https://github.com/Chopinsky/byte_buffer.git"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
