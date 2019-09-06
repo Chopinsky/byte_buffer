@@ -109,8 +109,7 @@
 //! }
 //! ```
 //!
-//! You can find more complex (i.e. practical) use cases in the
-//!  [examples](https://github.com/Chopinsky/byte_buffer/tree/master/sync_pool/examples)
+//! You can find more complex (i.e. practical) use cases in the [examples](https://github.com/Chopinsky/byte_buffer/tree/master/sync_pool/examples)
 //! folder.
 //!
 
@@ -142,5 +141,7 @@ mod tests {
             assert_eq!(ary.len(), 32);
             pool.put(ary);
         }
+
+        assert!(pool.len() > 0);
     }
 }

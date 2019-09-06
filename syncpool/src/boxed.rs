@@ -1,3 +1,57 @@
+//! This module contains APIs that allocate large struct directly on the heap, such that we can
+//! overcome the obstacle of using the `Box::new` syntax in certain situations, for example, a struct
+//! that is too large to fit into the default thread stack. The syntax limit is caused by how `box`
+//! is currently created: the struct will be created on the stack, and then moved to the heap, which
+//! implies that the struct must be first of all be able to fit into the (limited) stack size in the
+//! first place.
+//!
+//! This limit has been quite inconvenient for buffer struct where a buffer array can be of `MB` in
+//! size. Using APIs provided by this module can help mitigate the gap -- we will allocate a well aligned
+//! memory in the heap, where caller can pack the memory with valid and meaningful values.
+//!
+//! That said, the APIs can be extremely dangerous for struct that can be undefined if not properly
+//! initialized. There are 2 APIs marked as `safe`, which provides ways to initialize the object before
+//! yielding the instance to the caller, which could provide some warrants that the crafted struct
+//! shall be valid and away from undefined behaviors.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use syncpool;
+//!
+//! struct BigStruct {
+//!     a: u32,
+//!     b: u32,
+//!     c: [u8; 0x1_000_000],
+//!     d: Vec<u8>,
+//! }
+//!
+//! // create the object on the heap directly
+//! let big: Box<BigStruct> = syncpool::make_box(|mut src: Box<BigStruct>| {
+//!     src.a = 1;
+//!     src.b = 42;
+//!
+//!     for i in 0..0x1_000_000 {
+//!         src.c[i] = (i % 256) as u8;
+//!     }
+//!
+//!     src.d = Vec::with_capacity(0x1_000_000);
+//!     for i in 0..0x1_000_000 {
+//!         src.d.push((i % 256) as u8)
+//!     }
+//!
+//!     src
+//! });
+//!
+//! assert_eq!(big.a, 1);
+//! assert_eq!(big.b, 42);
+//!
+//! assert_eq!(big.c[255], 255);
+//! assert_eq!(big.c[4200], 104);
+//!
+//! assert_eq!(big.d[255], 255);
+//! assert_eq!(big.d[4200], 104);
+//! ```
 #![allow(unused)]
 
 use std::alloc::{alloc, alloc_zeroed, Layout};
@@ -14,6 +68,7 @@ use std::ptr;
 /// behaviors.
 ///
 /// # Examples
+///
 /// Create a boxed `BigStruct`
 ///
 /// ```
@@ -22,7 +77,7 @@ use std::ptr;
 /// struct BigStruct {
 ///     a: u32,
 ///     b: u32,
-///     c: [u8; 0x1000_000],
+///     c: [u8; 0x1_000_000],
 /// }
 ///
 /// // create the object on the heap directly
@@ -31,10 +86,10 @@ use std::ptr;
 /// // initialize the fields
 /// big.a = 0;
 /// big.b = 42;
-/// big.c = [0u8; 0x1000_000];
+/// big.c = [0u8; 0x1_000_000];
 ///
 /// // the fields are now valid
-/// assert_eq!(big.c.len(), 0x1000_000);
+/// assert_eq!(big.c.len(), 0x1_000_000);
 /// assert_eq!(big.c[4200], 0);
 /// assert_eq!(big.a, 0);
 /// ```
@@ -54,6 +109,7 @@ pub unsafe fn raw_box<T>() -> Box<T> {
 /// `std::ptr::null_mut()`).
 ///
 /// # Examples
+///
 /// Create a boxed `DangerousStruct`
 ///
 /// ```
@@ -62,14 +118,14 @@ pub unsafe fn raw_box<T>() -> Box<T> {
 /// struct BigStruct {
 ///     a: u32,
 ///     b: u32,
-///     c: [u8; 0x1000_000],
+///     c: [u8; 0x1_000_000],
 /// }
 ///
 /// // create the object on the heap directly
 /// let mut big: Box<BigStruct> = unsafe { raw_box_zeroed::<BigStruct>() };
 ///
 /// // the fields are now valid
-/// assert_eq!(big.c.len(), 0x1000_000);
+/// assert_eq!(big.c.len(), 0x1_000_000);
 /// assert_eq!(big.c[4200], 0);
 /// assert_eq!(big.a, 0);
 /// ```
@@ -98,7 +154,7 @@ pub unsafe fn raw_box_zeroed<T>() -> Box<T> {
 /// struct BigStruct {
 ///     a: u32,
 ///     b: u32,
-///     c: [u8; 0x1000_000],
+///     c: [u8; 0x1_000_000],
 /// }
 ///
 /// struct DangerousStruct {
@@ -126,13 +182,13 @@ pub unsafe fn raw_box_zeroed<T>() -> Box<T> {
 /// // the fields are now valid
 /// let big_ref = unsafe { boxed.c.as_ref() };
 ///
-/// assert_eq!(big_ref.c.len(), 0x1000_000);
+/// assert_eq!(big_ref.c.len(), 0x1_000_000);
 /// assert_eq!(big_ref.c[4200], 125);
 /// assert_eq!(big_ref.a, 42);
 /// assert_eq!(big_ref.b, 168);
 /// ```
 pub fn make_box<T, F: Fn(Box<T>) -> Box<T>>(packer: F) -> Box<T> {
-    let boxed = unsafe { raw_box::<T>() };
+    let boxed = unsafe { raw_box_zeroed::<T>() };
     packer(boxed)
 }
 
@@ -157,19 +213,19 @@ pub fn make_box<T, F: Fn(Box<T>) -> Box<T>>(packer: F) -> Box<T> {
 ///
 /// impl Default for BigStruct {
 ///     fn default() -> Self {
-///         BigStruct2 {
+///         BigStruct {
 ///             a: 1,
 ///             b: 42,
-///             c: vec::from_elem(0, 0x1000_000),
+///             c: vec::from_elem(0, 0x1_000_000),
 ///         }
 ///     }
 /// }
 ///
 /// // create the object directly on the heap
-/// let mut boxed: Box<BigStruct> = default_box();
+/// let boxed: Box<BigStruct> = default_box();
 ///
 /// // the fields are now valid
-/// assert_eq!(boxed.c.len(), 0x1000_000);
+/// assert_eq!(boxed.c.len(), 0x1_000_000);
 /// assert_eq!(boxed.a, 1);
 /// assert_eq!(boxed.b, 42);
 ///```
@@ -194,7 +250,7 @@ mod boxed_tests {
     struct BigStruct {
         a: u32,
         b: u32,
-        c: [u8; 0x1000_000],
+        c: [u8; 0x1_000_000],
     }
 
     struct BigStruct2 {
@@ -208,7 +264,7 @@ mod boxed_tests {
             BigStruct2 {
                 a: 1,
                 b: 42,
-                c: vec::from_elem(0, 0x1000_000),
+                c: vec::from_elem(0, 0x1_000_000),
             }
         }
     }
@@ -253,7 +309,7 @@ mod boxed_tests {
     fn raw_box_test() {
         let boxed = make_test_box::<BigStruct>(true);
 
-        assert_eq!(boxed.c.len(), 0x1000_000);
+        assert_eq!(boxed.c.len(), 0x1_000_000);
         assert_eq!(boxed.c[4200], 0);
         assert_eq!(boxed.a, 0);
     }
@@ -278,7 +334,7 @@ mod boxed_tests {
         // the fields are now valid
         let big_ref = unsafe { boxed.c.as_ref() };
 
-        assert_eq!(big_ref.c.len(), 0x1000_000);
+        assert_eq!(big_ref.c.len(), 0x1_000_000);
         assert_eq!(big_ref.c[4200], 125);
         assert_eq!(big_ref.a, 42);
         assert_eq!(big_ref.b, 168);
@@ -289,11 +345,11 @@ mod boxed_tests {
         let mut boxed = make_test_box::<BigStruct>(false);
         boxed.a = 1;
         boxed.b = 42;
-        boxed.c = [0u8; 0x1000_000];
+        boxed.c = [0u8; 0x1_000_000];
 
         assert_eq!(boxed.a, 1);
         assert_eq!(boxed.b, 42);
-        assert_eq!(boxed.c.len(), 0x1000_000);
+        assert_eq!(boxed.c.len(), 0x1_000_000);
         assert_eq!(boxed.c[4200], 0);
     }
 
@@ -304,7 +360,7 @@ mod boxed_tests {
 
         assert_eq!(big_ref.a, 42);
         assert_eq!(big_ref.b, 168);
-        assert_eq!(big_ref.c.len(), 0x1000_000);
+        assert_eq!(big_ref.c.len(), 0x1_000_000);
         assert_eq!(big_ref.c[4200], 125);
 
         let atomic = unsafe { &*boxed.b.as_ptr() };
@@ -317,7 +373,7 @@ mod boxed_tests {
         let mut boxed: Box<BigStruct2> = default_box();
 
         // the fields are now valid
-        assert_eq!(boxed.c.len(), 0x1000_000);
+        assert_eq!(boxed.c.len(), 0x1_000_000);
         assert_eq!(boxed.a, 1);
         assert_eq!(boxed.b, 42);
     }

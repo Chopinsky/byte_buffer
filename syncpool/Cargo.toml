@@ -1,6 +1,6 @@
 [package]
 name = "syncpool"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["Jacob Zuo <chopinsky@live.com>"]
 description = "A thread-friendly library for recycle of heavy and heap-based objects to reduce allocation and memory pressure"
 keywords = ["sync-pool", "lock-free", "memory", "safety", "stackless"]

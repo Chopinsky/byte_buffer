@@ -1,6 +1,8 @@
 #![allow(unused)]
 
-use crate::utils::{check_len, cpu_relax, enter};
+use crate::make_box;
+use crate::pool::ElemBuilder;
+use crate::utils::{check_len, cpu_relax, enter, make_elem};
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
@@ -168,15 +170,15 @@ pub(crate) struct Bucket2<T> {
 impl<T> Bucket2<T> {
     /// Instantiate the bucket and set initial values. If we want to pre-fill the slots, we will also
     /// make sure the bitmap is updated as well.
-    pub(crate) fn new(filler: Option<fn() -> T>) -> Self {
+    pub(crate) fn new(filler: Option<&ElemBuilder<T>>) -> Self {
         // create the placeholder
         let mut slice: [*mut T; SLOT_CAP] = [ptr::null_mut(); SLOT_CAP];
         let mut bitmap: u16 = 0;
 
         // fill the slots and update the bitmap
-        if let Some(handle) = filler.as_ref() {
+        if let Some(handle) = filler {
             for (i, item) in slice.iter_mut().enumerate() {
-                *item = Box::into_raw(Box::new(handle()));
+                *item = Box::into_raw(make_elem(handle));
                 bitmap |= 1 << (2 * i as u16);
             }
         }
@@ -318,13 +320,14 @@ impl<T> Bucket2<T> {
 impl<T> Drop for Bucket2<T> {
     fn drop(&mut self) {
         for item in self.slot.iter_mut() {
-            unsafe {
-                ptr::drop_in_place(*item);
+            if item.is_null() {
+                continue;
             }
+
+            unsafe { ptr::drop_in_place(*item); }
             *item = ptr::null_mut();
         }
     }
 }
 
 unsafe impl<T> Send for Bucket2<T> {}
-unsafe impl<T> Sync for Bucket2<T> {}

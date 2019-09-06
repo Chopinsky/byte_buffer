@@ -1,5 +1,5 @@
 use crate::bucket::*;
-use crate::utils::cpu_relax;
+use crate::utils::{cpu_relax, make_elem};
 use std::ops::Add;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -8,8 +8,15 @@ const POOL_SIZE: usize = 8;
 const EXPANSION_CAP: usize = 512;
 const SPIN_PERIOD: usize = 4;
 
-/// Configuration flags
+/// Configuration flag (@ bit positions):
+/// 1 -> If the pool is allowed to expand when under pressure
 const CONFIG_ALLOW_EXPANSION: usize = 1;
+
+pub(crate) enum ElemBuilder<T> {
+    Default(fn() -> Box<T>),
+    Builder(fn() -> T),
+    Packer(fn(Box<T>) -> Box<T>),
+}
 
 struct VisitorGuard<'a>(&'a AtomicUsize);
 
@@ -42,7 +49,7 @@ pub struct SyncPool<T> {
     slots: Vec<Bucket2<T>>,
 
     /// the next bucket to try
-    curr: AtomicUsize,
+    curr: (AtomicUsize, AtomicUsize),
 
     /// First node: how many threads are concurrently accessing the struct:
     ///   0   -> updating the `slots` field;
@@ -61,12 +68,16 @@ pub struct SyncPool<T> {
 
     /// the handle to be invoked before putting the struct back
     reset_handle: Option<fn(&mut T)>,
+
+    /// The builder that will be tasked to create a new instance of the data when the pool is unable
+    /// to render one.
+    builder: ElemBuilder<T>,
 }
 
 impl<T: Default> SyncPool<T> {
     /// Create a pool with default size of 64 pre-allocated elements in it.
     pub fn new() -> Self {
-        Self::make_pool(POOL_SIZE)
+        Self::make_pool(POOL_SIZE, ElemBuilder::Default(Default::default))
     }
 
     /// Create a `SyncPool` with pre-defined number of elements. Note that we will round-up
@@ -77,7 +88,77 @@ impl<T: Default> SyncPool<T> {
             pool_size = 1
         }
 
-        Self::make_pool(pool_size)
+        Self::make_pool(pool_size, ElemBuilder::Default(Default::default))
+    }
+}
+
+impl<T> SyncPool<T> {
+    /// Create a pool with default size of 64 pre-allocated elements in it.
+    pub fn with_builder(builder: fn() -> T) -> Self {
+        Self::make_pool(POOL_SIZE, ElemBuilder::Builder(builder))
+    }
+
+    /// Create a `SyncPool` with pre-defined number of elements. Note that we will round-up
+    /// the size such that the total number of elements in the pool will mod to 8.
+    pub fn with_builder_and_size(size: usize, builder: fn() -> T) -> Self {
+        let mut pool_size = size / SLOT_CAP;
+        if pool_size < 1 {
+            pool_size = 1
+        }
+
+        Self::make_pool(pool_size, ElemBuilder::Builder(builder))
+    }
+
+    /// Create a pool with default size of 64 pre-allocated elements in it, which will use the `packer`
+    /// handler to initialize the element that's being provided by the pool. Note that the handler
+    /// shall take a boxed instance of the element that only contains placeholder fields, and it is
+    /// the caller/handler's job to initialize the fields and pack it with valid and meaningful values.
+    /// If the struct is valid with all-zero values, the handler can just return the input element.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use syncpool::*;
+    /// use std::vec;
+    ///
+    /// struct BigStruct {
+    ///     a: u32,
+    ///     b: u32,
+    ///     c: Vec<u8>,
+    /// }
+    ///
+    /// let mut pool = SyncPool::with_packer(|mut src: Box<BigStruct>| {
+    ///     src.a = 1;
+    ///     src.b = 42;
+    ///     src.c = vec::from_elem(0u8, 0x1_000_000);
+    ///     src
+    /// });
+    ///
+    /// let big_box = pool.get();
+    ///
+    /// assert_eq!(big_box.a, 1);
+    /// assert_eq!(big_box.b, 42);
+    /// assert_eq!(big_box.c.len(), 0x1_000_000);
+    ///
+    /// pool.put(big_box);
+    /// ```
+    pub fn with_packer(packer: fn(Box<T>) -> Box<T>) -> Self {
+        Self::make_pool(POOL_SIZE, ElemBuilder::Packer(packer))
+    }
+
+    /// Create a `SyncPool` with pre-defined number of elements and a packer handler. The packer handler
+    /// shall essentially function the same way as in `with_packer`, that it shall take the responsibility
+    /// to initialize all the fields of a placeholder struct on the heap, otherwise the element returned
+    /// by the pool will be essentially undefined, unless all the struct's fields can be represented
+    /// by a 0 value. In addition, we will round-up the size such that the total number of elements
+    /// in the pool will mod to 8.
+    pub fn with_packer_and_size(size: usize, packer: fn(Box<T>) -> Box<T>) -> Self {
+        let mut pool_size = size / SLOT_CAP;
+        if pool_size < 1 {
+            pool_size = 1
+        }
+
+        Self::make_pool(pool_size, ElemBuilder::Packer(packer))
     }
 
     /// Try to obtain a pre-allocated element from the pool. This method will always succeed even if
@@ -89,7 +170,7 @@ impl<T: Default> SyncPool<T> {
 
         // start from where we're left
         let cap = self.slots.len();
-        let origin: usize = self.curr.load(Ordering::Acquire) % cap;
+        let origin: usize = self.curr.0.load(Ordering::Acquire) % cap;
 
         let mut pos = origin;
         let mut trials = cap;
@@ -111,7 +192,9 @@ impl<T: Default> SyncPool<T> {
 
                 if let Ok(val) = checkout {
                     // now we're locked, get the val and update internal states
-                    self.curr.store(pos, Ordering::Release);
+                    self.curr.0.store(pos, Ordering::Release);
+
+                    println!("Providing value");
 
                     // done
                     return val;
@@ -125,7 +208,7 @@ impl<T: Default> SyncPool<T> {
             cpu_relax(SPIN_PERIOD);
 
             // update to the next position now.
-            pos = self.curr.fetch_add(1, Ordering::AcqRel) % cap;
+            pos = self.curr.0.fetch_add(1, Ordering::AcqRel) % cap;
             trials -= 1;
 
             // we've finished 1 loop but not finding a value to extract, quit
@@ -136,9 +219,10 @@ impl<T: Default> SyncPool<T> {
 
         // make sure our guard has been returned if we want the correct visitor count
         drop(_guard);
-
         self.miss_count.fetch_add(1, Ordering::Relaxed);
-        Default::default()
+
+        // create a new object
+        make_elem(&self.builder)
     }
 
     /// Try to return an element to the `SyncPool`. If succeed, we will return `None` to indicate that
@@ -151,7 +235,7 @@ impl<T: Default> SyncPool<T> {
         // start from where we're left
         let cap = self.slots.len();
         let mut trials = 2 * cap;
-        let mut pos: usize = self.curr.load(Ordering::Acquire) % cap;
+        let mut pos: usize = self.curr.1.load(Ordering::Acquire) % cap;
 
         loop {
             // check this slot
@@ -160,7 +244,7 @@ impl<T: Default> SyncPool<T> {
             // try the access or move on
             if let Ok(i) = slot.access(false) {
                 // now we're locked, get the val and update internal states
-                self.curr.store(pos, Ordering::Release);
+                self.curr.1.store(pos, Ordering::Release);
 
                 // put the value back and reset
                 slot.release(i, val, self.reset_handle);
@@ -171,7 +255,7 @@ impl<T: Default> SyncPool<T> {
 
             /*            if slot.access(false) {
                 // now we're locked, get the val and update internal states
-                self.curr.store(pos, Ordering::Release);
+                self.curr.1.store(pos, Ordering::Release);
 
                 // put the value back into the slot
                 slot.release(val, self.reset_handle.load(Ordering::Acquire));
@@ -181,10 +265,10 @@ impl<T: Default> SyncPool<T> {
             }*/
 
             // hold off a bit to reduce contentions
-            cpu_relax(SPIN_PERIOD / 2);
+            cpu_relax(SPIN_PERIOD);
 
             // update states
-            pos = self.curr.fetch_sub(1, Ordering::AcqRel) % cap;
+            pos = self.curr.1.fetch_sub(1, Ordering::AcqRel) % cap;
             trials -= 1;
 
             // we've finished 1 loop but not finding a value to extract, quit
@@ -194,41 +278,44 @@ impl<T: Default> SyncPool<T> {
         }
     }
 
-    fn make_pool(size: usize) -> Self {
+    fn make_pool(size: usize, builder: ElemBuilder<T>) -> Self {
         let mut pool = SyncPool {
             slots: Vec::with_capacity(size),
-            curr: AtomicUsize::new(0),
+            curr: (AtomicUsize::new(0), AtomicUsize::new(0)),
             visitor_counter: (AtomicUsize::new(1), AtomicBool::new(false)),
             miss_count: AtomicUsize::new(0),
             configure: AtomicUsize::new(0),
             reset_handle: None,
+            builder,
         };
 
-        pool.add_slots(size, Some(|| Default::default()));
+        pool.add_slots(size, true);
         pool
     }
 
     #[inline]
-    fn add_slots(&mut self, count: usize, filler: Option<fn() -> T>) {
-        (0..count).for_each(|_| {
+    fn add_slots(&mut self, count: usize, fill: bool) {
+        let filler = if fill { Some(&self.builder) } else { None };
+
+        for _ in 0..count {
             // self.slots.push(Bucket::new(fill));
             self.slots.push(Bucket2::new(filler));
-        });
+        }
     }
 
     fn update_config(&mut self, mask: usize, target: bool) {
-        let mut curr = self.configure.load(Ordering::SeqCst);
+        let mut config = self.configure.load(Ordering::SeqCst);
 
         while let Err(old) =
             self.configure
-                .compare_exchange(curr, curr ^ mask, Ordering::SeqCst, Ordering::Relaxed)
+                .compare_exchange(config, config ^ mask, Ordering::SeqCst, Ordering::Relaxed)
         {
             if !((old & mask > 0) ^ target) {
                 // the configure already matches, we're done
                 return;
             }
 
-            curr = old;
+            config = old;
         }
     }
 }
@@ -244,10 +331,16 @@ where
 
 impl<T> Drop for SyncPool<T> {
     fn drop(&mut self) {
+        println!("Trying to drop the pool now ...");
+
         self.slots.clear();
+
+        println!("Trying to drop the pool now again ...");
 
         // now drop the reset handle if it's not null
         self.reset_handle.take();
+
+        println!("Trying to drop the pool now done ...");
     }
 }
 
@@ -265,7 +358,7 @@ pub trait PoolState {
     }
 }
 
-impl<T: Default> PoolState for SyncPool<T> {
+impl<T> PoolState for SyncPool<T> {
     fn expansion_enabled(&self) -> bool {
         let configure = self.configure.load(Ordering::SeqCst);
         configure & CONFIG_ALLOW_EXPANSION > 0
@@ -295,10 +388,7 @@ pub trait PoolManager<T> {
 
 /// The pool manager that provide many useful utilities to keep the SyncPool close to the needs of
 /// the caller program.
-impl<T: Default> PoolManager<T> for SyncPool<T>
-where
-    T: Default,
-{
+impl<T> PoolManager<T> for SyncPool<T> {
     /// Set or update the reset handle. If set, the reset handle will be invoked every time an element
     /// has been returned back to the pool (i.e. calling the `put` method), regardless of if the element
     /// is created by the pool or not.
@@ -401,7 +491,7 @@ where
 
         if safe {
             // update the slots by pushing `additional` slots
-            self.add_slots(additional, Some(|| Default::default()));
+            self.add_slots(additional, true);
             self.miss_count.store(0, Ordering::Release);
         }
 
@@ -438,7 +528,7 @@ where
 
         // try to put `quota` number of elements into the pool
         while count < quota {
-            let mut val = Box::new(Default::default());
+            let mut val = make_elem(&self.builder);
             let mut runs = 0;
 
             // retry to put the allocated element into the pool.
@@ -464,5 +554,36 @@ where
         }
 
         count
+    }
+}
+
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+    use std::vec;
+
+    struct BigStruct {
+        a: u32,
+        b: u32,
+        c: Vec<u8>,
+    }
+
+    #[test]
+    fn use_packer() {
+        let mut pool = SyncPool::with_packer(|mut src: Box<BigStruct>| {
+            src.a = 1;
+            src.b = 42;
+            src.c = vec::from_elem(0u8, 0x1_000_000);
+            src
+        });
+
+        println!("Pool created...");
+
+        let big_box = pool.get();
+
+        assert_eq!(big_box.a, 1);
+        assert_eq!(big_box.b, 42);
+        assert_eq!(big_box.c.len(), 0x1_000_000);
     }
 }
