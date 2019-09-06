@@ -1,11 +1,24 @@
 #![allow(unused)]
 
+use crate::boxed::make_box;
 use crate::bucket::SLOT_CAP;
+use crate::pool::ElemBuilder;
 use std::sync::atomic;
 
 const GET_MASK: u16 = 0b1010_1010_1010_1010;
 const PUT_MASK: u16 = 0b1111_1111_1111_1111;
 const FULL_FLAG: u16 = 0b0101_0101_0101_0101;
+
+pub(crate) fn make_elem<T>(builder: &ElemBuilder<T>) -> Box<T> {
+    match builder {
+        ElemBuilder::Default(f) => f(),
+        ElemBuilder::Builder(f) => Box::new(f()),
+        ElemBuilder::Packer(f) => {
+            let boxed: Box<T> = make_box(f);
+            boxed
+        }
+    }
+}
 
 #[inline(always)]
 pub(crate) fn cpu_relax(count: usize) {
