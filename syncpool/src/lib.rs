@@ -109,6 +109,83 @@
 //! }
 //! ```
 //!
+//! In addition, if you prefer to use a constructor for creating and intializing the element, you
+//! may opt to use the `with_builder` API:
+//!
+//! ```rust
+//! use syncpool::prelude::*;
+//! use std::vec;
+//!
+//! struct BigStruct {
+//!     a: u32,
+//!     b: u32,
+//!     c: Vec<u8>
+//! }
+//!
+//! impl BigStruct {
+//!     fn new() -> Self {
+//!         BigStruct {
+//!             a: 1,
+//!             b: 42,
+//!             c: vec::from_elem(0u8, 0x1_000_000),
+//!         }
+//!     }
+//! }
+//!
+//! let mut pool = SyncPool::with_builder(BigStruct::new);
+//!
+//! println!("Pool created...");
+//!
+//! let big_box = pool.get();
+//!
+//! assert_eq!(big_box.a, 1);
+//! assert_eq!(big_box.b, 42);
+//! assert_eq!(big_box.c.len(), 0x1_000_000);
+//!
+//! pool.put(big_box);
+//! ```
+//!
+//! There are occassions where the struct is too large to fit into the stack (e.g. a buffer data
+//! structure), you can instead use the `with_packer` API to intialize the object that has already
+//! been created on heap, so you can worry less on making the object and move it to the heap (and
+//! with automatic performance boost)!
+//!
+//! Note that if calling the `with_packer` API, you have to make sure that all fields shall be properly
+//! initialized. The provided placeholder object is well-aligned, however, the fields may be undefined
+//! if not initialized correctly, e.g. a field of the `NonNull<T>` type, or the `MaybeUninit<T>` type.
+//!
+//! ```rust
+//! use syncpool::prelude::*;
+//! use std::vec;
+//!
+//! struct BigStruct {
+//!     a: u32,
+//!     b: u32,
+//!     c: Vec<u8>
+//! }
+//!
+//! impl BigStruct {
+//!     fn initializer(mut self: Box<Self>) -> Box<Self> {
+//!         self.a = 1;
+//!         self.b = 42;
+//!         self.c = vec::from_elem(0u8, 0x1_000_000);
+//!         self
+//!     }
+//! }
+//!
+//! let mut pool = SyncPool::with_packer(BigStruct::initializer);
+//!
+//! println!("Pool created...");
+//!
+//! let big_box = pool.get();
+//!
+//! assert_eq!(big_box.a, 1);
+//! assert_eq!(big_box.b, 42);
+//! assert_eq!(big_box.c.len(), 0x1_000_000);
+//!
+//! pool.put(big_box);
+//! ```
+//!
 //! You can find more complex (i.e. practical) use cases in the [examples](https://github.com/Chopinsky/byte_buffer/tree/master/sync_pool/examples)
 //! folder.
 //!

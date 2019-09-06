@@ -93,13 +93,51 @@ impl<T: Default> SyncPool<T> {
 }
 
 impl<T> SyncPool<T> {
-    /// Create a pool with default size of 64 pre-allocated elements in it.
+    /// Create a pool with default size of 64 pre-allocated elements in it, which will use the `builder`
+    /// handler to obtain the initialized instance of the struct, and then place the object into the
+    /// `syncpool` for later use.
+    ///
+    /// Note that the handler shall be responsible for creating and initializing the struct object
+    /// with all fields being valid. After all, they will be the same objects provided to the caller
+    /// when invoking the `get` call.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use syncpool::*;
+    /// use std::vec;
+    ///
+    /// struct BigStruct {
+    ///     a: u32,
+    ///     b: u32,
+    ///     c: Vec<u8>,
+    /// }
+    ///
+    /// let mut pool = SyncPool::with_builder(|| {
+    ///     BigStruct {
+    ///         a: 1,
+    ///         b: 42,
+    ///         c: vec::from_elem(0u8, 0x1_000_000),
+    ///     }
+    /// });
+    ///
+    /// let big_box: Box<BigStruct> = pool.get();
+    ///
+    /// assert_eq!(big_box.a, 1);
+    /// assert_eq!(big_box.b, 42);
+    /// assert_eq!(big_box.c.len(), 0x1_000_000);
+    ///
+    /// pool.put(big_box);
+    /// ```
     pub fn with_builder(builder: fn() -> T) -> Self {
         Self::make_pool(POOL_SIZE, ElemBuilder::Builder(builder))
     }
 
-    /// Create a `SyncPool` with pre-defined number of elements. Note that we will round-up
-    /// the size such that the total number of elements in the pool will mod to 8.
+    /// Create a `SyncPool` with pre-defined number of elements and a packer handler. The `builder`
+    /// handler shall essentially function the same way as in the `with_builder`, that it shall take
+    /// the responsibility to create and initialize the element, and return the instance at the end
+    /// of the `builder` closure. Note that we will round-up the size such that the total number of
+    /// elements in the pool will mod to 8.
     pub fn with_builder_and_size(size: usize, builder: fn() -> T) -> Self {
         let mut pool_size = size / SLOT_CAP;
         if pool_size < 1 {
@@ -110,10 +148,12 @@ impl<T> SyncPool<T> {
     }
 
     /// Create a pool with default size of 64 pre-allocated elements in it, which will use the `packer`
-    /// handler to initialize the element that's being provided by the pool. Note that the handler
-    /// shall take a boxed instance of the element that only contains placeholder fields, and it is
-    /// the caller/handler's job to initialize the fields and pack it with valid and meaningful values.
-    /// If the struct is valid with all-zero values, the handler can just return the input element.
+    /// handler to initialize the element that's being provided by the pool.
+    ///
+    /// Note that the handler shall take a boxed instance of the element that only contains
+    /// placeholder fields, and it is the caller/handler's job to initialize the fields and pack it
+    /// with valid and meaningful values. If the struct is valid with all-zero values, the handler
+    /// can just return the input element.
     ///
     /// # Examples
     ///
@@ -134,7 +174,7 @@ impl<T> SyncPool<T> {
     ///     src
     /// });
     ///
-    /// let big_box = pool.get();
+    /// let big_box: Box<BigStruct> = pool.get();
     ///
     /// assert_eq!(big_box.a, 1);
     /// assert_eq!(big_box.b, 42);
@@ -146,12 +186,12 @@ impl<T> SyncPool<T> {
         Self::make_pool(POOL_SIZE, ElemBuilder::Packer(packer))
     }
 
-    /// Create a `SyncPool` with pre-defined number of elements and a packer handler. The packer handler
-    /// shall essentially function the same way as in `with_packer`, that it shall take the responsibility
-    /// to initialize all the fields of a placeholder struct on the heap, otherwise the element returned
-    /// by the pool will be essentially undefined, unless all the struct's fields can be represented
-    /// by a 0 value. In addition, we will round-up the size such that the total number of elements
-    /// in the pool will mod to 8.
+    /// Create a `SyncPool` with pre-defined number of elements and a packer handler. The `packer`
+    /// handler shall essentially function the same way as in `with_packer`, that it shall take the
+    /// responsibility to initialize all the fields of a placeholder struct on the heap, otherwise
+    /// the element returned by the pool will be essentially undefined, unless all the struct's
+    /// fields can be represented by a 0 value. In addition, we will round-up the size such that
+    /// the total number of elements in the pool will mod to 8.
     pub fn with_packer_and_size(size: usize, packer: fn(Box<T>) -> Box<T>) -> Self {
         let mut pool_size = size / SLOT_CAP;
         if pool_size < 1 {
@@ -193,8 +233,6 @@ impl<T> SyncPool<T> {
                 if let Ok(val) = checkout {
                     // now we're locked, get the val and update internal states
                     self.curr.0.store(pos, Ordering::Release);
-
-                    println!("Providing value");
 
                     // done
                     return val;
@@ -331,16 +369,10 @@ where
 
 impl<T> Drop for SyncPool<T> {
     fn drop(&mut self) {
-        println!("Trying to drop the pool now ...");
-
         self.slots.clear();
-
-        println!("Trying to drop the pool now again ...");
 
         // now drop the reset handle if it's not null
         self.reset_handle.take();
-
-        println!("Trying to drop the pool now done ...");
     }
 }
 
@@ -569,16 +601,38 @@ mod pool_tests {
         c: Vec<u8>,
     }
 
+    impl BigStruct {
+        fn new() -> Self {
+            BigStruct {
+                a: 1,
+                b: 42,
+                c: vec::from_elem(0u8, 0x1_000_000),
+            }
+        }
+
+        fn initializer(mut self: Box<Self>) -> Box<Self> {
+            self.a = 1;
+            self.b = 42;
+            self.c = vec::from_elem(0u8, 0x1_000_000);
+
+            self
+        }
+    }
+
     #[test]
     fn use_packer() {
-        let mut pool = SyncPool::with_packer(|mut src: Box<BigStruct>| {
-            src.a = 1;
-            src.b = 42;
-            src.c = vec::from_elem(0u8, 0x1_000_000);
-            src
-        });
+        let mut pool = SyncPool::with_packer(BigStruct::initializer);
 
-        println!("Pool created...");
+        let big_box = pool.get();
+
+        assert_eq!(big_box.a, 1);
+        assert_eq!(big_box.b, 42);
+        assert_eq!(big_box.c.len(), 0x1_000_000);
+    }
+
+    #[test]
+    fn use_builder() {
+        let mut pool = SyncPool::with_builder(BigStruct::new);
 
         let big_box = pool.get();
 
