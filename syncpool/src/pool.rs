@@ -3,6 +3,7 @@ use crate::utils::{cpu_relax, make_elem};
 use std::ops::Add;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use std::thread;
 
 const POOL_SIZE: usize = 8;
 const EXPANSION_CAP: usize = 512;
@@ -21,20 +22,25 @@ pub(crate) enum ElemBuilder<T> {
 struct VisitorGuard<'a>(&'a AtomicUsize);
 
 impl<'a> VisitorGuard<'a> {
-    fn register(base: &'a (AtomicUsize, AtomicBool)) -> Self {
+    fn register(base: &'a (AtomicUsize, AtomicBool), get: bool) -> Option<Self> {
         let mut count = 8;
 
         // wait if the underlying storage is in protection mode
         while base.1.load(Ordering::Relaxed) {
+            if get {
+                return None;
+            }
+
             cpu_relax(count);
 
-            if count > 2 {
+            if count > 4 {
                 count -= 1;
             }
         }
 
         base.0.fetch_add(1, Ordering::AcqRel);
-        VisitorGuard(&base.0)
+
+        Some(VisitorGuard(&base.0))
     }
 }
 
@@ -206,14 +212,15 @@ impl<T> SyncPool<T> {
     /// will be created.
     pub fn get(&mut self) -> Box<T> {
         // update user count
-        let _guard = VisitorGuard::register(&self.visitor_counter);
+        let guard = VisitorGuard::register(&self.visitor_counter, true);
+        if guard.is_none() {
+            return make_elem(&self.builder);
+        }
 
         // start from where we're left
         let cap = self.slots.len();
-        let origin: usize = self.curr.0.load(Ordering::Acquire) % cap;
-
-        let mut pos = origin;
         let mut trials = cap;
+        let mut pos: usize = self.curr.0.load(Ordering::Acquire) % cap;
 
         loop {
             // check this slot
@@ -256,7 +263,7 @@ impl<T> SyncPool<T> {
         }
 
         // make sure our guard has been returned if we want the correct visitor count
-        drop(_guard);
+        drop(guard);
         self.miss_count.fetch_add(1, Ordering::Relaxed);
 
         // create a new object
@@ -268,7 +275,7 @@ impl<T> SyncPool<T> {
     /// that the caller can decide if the element shall be just discarded, or try put it back again.
     pub fn put(&mut self, val: Box<T>) -> Option<Box<T>> {
         // update user count
-        let _guard = VisitorGuard::register(&self.visitor_counter);
+        let _guard = VisitorGuard::register(&self.visitor_counter, false);
 
         // start from where we're left
         let cap = self.slots.len();
@@ -303,10 +310,14 @@ impl<T> SyncPool<T> {
             }*/
 
             // hold off a bit to reduce contentions
-            cpu_relax(SPIN_PERIOD);
+            if trials < cap {
+                cpu_relax(SPIN_PERIOD);
+            } else {
+                thread::yield_now();
+            }
 
             // update states
-            pos = self.curr.1.fetch_sub(1, Ordering::AcqRel) % cap;
+            pos = self.curr.1.fetch_add(1, Ordering::AcqRel) % cap;
             trials -= 1;
 
             // we've finished 1 loop but not finding a value to extract, quit
@@ -407,7 +418,9 @@ impl<T> PoolState for SyncPool<T> {
     fn len(&self) -> usize {
         self.slots
             .iter()
-            .fold(0, |sum, item| sum + item.size_hint())
+            .fold(0, |sum, item|
+                sum + item.size_hint()
+            )
     }
 }
 
@@ -440,9 +453,12 @@ impl<T> PoolManager<T> for SyncPool<T> {
                 Err(_) => {
                     cpu_relax(count);
 
-                    if count > 4 {
-                        // update the counter (and the busy wait period)
-                        count -= 1;
+                    // update the counter (and the busy wait period)
+                    count -= 1;
+
+                    if count < 4 {
+                        // yield the thread for later try
+                        thread::yield_now();
                     } else if Instant::now() > timeout {
                         // don't block for more than 16ms
                         return self;
@@ -511,9 +527,10 @@ impl<T> PoolManager<T> for SyncPool<T> {
                 Ok(_) => break true,
                 Err(_) => {
                     cpu_relax(2);
+                    count -= 1;
 
-                    if count > 2 {
-                        count -= 1;
+                    if count < 4 {
+                        thread::yield_now();
                     } else if !block {
                         break false;
                     }
@@ -579,7 +596,11 @@ impl<T> PoolManager<T> for SyncPool<T> {
                 }
 
                 // relax a bit
-                cpu_relax(if runs < 16 { runs / 2 } else { 8 });
+                if runs > 8 {
+                    thread::yield_now();
+                } else {
+                    cpu_relax(runs / 2);
+                }
             }
 
             count += 1;

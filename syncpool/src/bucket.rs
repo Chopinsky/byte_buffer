@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 
 /// Constants
 pub(crate) const SLOT_CAP: usize = 8;
+const TRIALS_COUNT: usize = 4;
 
 pub(crate) struct Bucket<T> {
     /// the actual data store
@@ -217,7 +218,7 @@ impl<T> Bucket2<T> {
         }
 
         // try 2 times on this slot if the desired slot happens to be taken ...
-        let mut trials: usize = 4;
+        let mut trials: usize = TRIALS_COUNT;
         while trials > 0 {
             trials -= 1;
 
