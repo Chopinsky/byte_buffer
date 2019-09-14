@@ -610,7 +610,6 @@ impl<T> PoolManager<T> for SyncPool<T> {
     }
 }
 
-
 #[cfg(test)]
 mod pool_tests {
     use super::*;
