@@ -29,7 +29,7 @@ impl ByteBuffer {
                 BufferPool::handle_work(receiver);
             });
 
-            BufferPool::make(store, pool, capacity, sender);
+            BufferPool::make(store, capacity, sender);
         });
     }
 

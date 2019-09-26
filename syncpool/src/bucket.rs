@@ -325,7 +325,9 @@ impl<T> Drop for Bucket2<T> {
                 continue;
             }
 
-            unsafe { ptr::drop_in_place(*item); }
+            unsafe {
+                ptr::drop_in_place(*item);
+            }
             *item = ptr::null_mut();
         }
     }

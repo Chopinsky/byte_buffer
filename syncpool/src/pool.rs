@@ -2,8 +2,8 @@ use crate::bucket::*;
 use crate::utils::{cpu_relax, make_elem};
 use std::ops::Add;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
 use std::thread;
+use std::time::{Duration, Instant};
 
 const POOL_SIZE: usize = 8;
 const EXPANSION_CAP: usize = 512;
@@ -355,10 +355,12 @@ impl<T> SyncPool<T> {
     fn update_config(&mut self, mask: usize, target: bool) {
         let mut config = self.configure.load(Ordering::SeqCst);
 
-        while let Err(old) =
-            self.configure
-                .compare_exchange(config, config ^ mask, Ordering::SeqCst, Ordering::Relaxed)
-        {
+        while let Err(old) = self.configure.compare_exchange(
+            config,
+            config ^ mask,
+            Ordering::SeqCst,
+            Ordering::Relaxed,
+        ) {
             if !((old & mask > 0) ^ target) {
                 // the configure already matches, we're done
                 return;
@@ -418,9 +420,7 @@ impl<T> PoolState for SyncPool<T> {
     fn len(&self) -> usize {
         self.slots
             .iter()
-            .fold(0, |sum, item|
-                sum + item.size_hint()
-            )
+            .fold(0, |sum, item| sum + item.size_hint())
     }
 }
 
