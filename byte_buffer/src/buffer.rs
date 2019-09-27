@@ -31,7 +31,7 @@ pub(crate) struct BufferPool {
 pub(crate) trait PoolManagement {
     fn make(
         store: Vec<Vec<u8>>,
-//        pool: Vec<usize>,
+        //        pool: Vec<usize>,
         slice_capacity: usize,
         worker_chan: Sender<WorkerOp>,
     );
@@ -49,7 +49,7 @@ pub(crate) trait PoolManagement {
 impl PoolManagement for BufferPool {
     fn make(
         store: Vec<Vec<u8>>,
-//        pool: Vec<usize>,
+        //        pool: Vec<usize>,
         slice_capacity: usize,
         worker_chan: Sender<WorkerOp>,
     ) {
@@ -60,7 +60,7 @@ impl PoolManagement for BufferPool {
 
             BUFFER.replace(BufferPool {
                 store,
-//                pool,
+                //                pool,
                 slice_capacity,
                 worker_chan,
                 closing: AtomicBool::new(false),
@@ -136,7 +136,7 @@ impl PoolManagement for BufferPool {
                         let id = buf.store.len();
 
                         buf.store.push(vec);
-//                        buf.pool.push(id);
+                        //                        buf.pool.push(id);
 
                         if dirty {
                             buf.reset(id);
@@ -216,13 +216,13 @@ trait PoolOps {
 impl PoolOps for BufferPool {
     #[inline]
     fn try_reserve(&mut self) -> Option<usize> {
-//        self.pool.pop()
+        //        self.pool.pop()
         None
     }
 
     fn release(&mut self, id: usize) {
         if id < self.store.len() {
-//            self.pool.push(id);
+            //            self.pool.push(id);
         }
     }
 
@@ -252,11 +252,11 @@ impl PoolOps for BufferPool {
         let start = self.store.len();
 
         self.store.reserve(additional);
-//        self.pool.reserve(additional);
+        //        self.pool.reserve(additional);
 
         (0..additional).for_each(|offset| {
             self.store.push(vec::from_elem(0, capacity));
-//            self.pool.push(start + offset);
+            //            self.pool.push(start + offset);
         });
 
         // return the last element in the buffer

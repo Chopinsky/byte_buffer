@@ -34,6 +34,7 @@
 
 use crossbeam_channel as channel;
 
+mod bucket;
 mod buffer;
 mod lock;
 pub mod manager;
