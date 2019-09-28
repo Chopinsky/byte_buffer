@@ -1,32 +1,32 @@
 #![allow(unused)]
 
 use crate::utils::make_buffer;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, Ordering, AtomicPtr};
 use std::u16;
-use std::ptr::NonNull;
+use std::ptr::{self, NonNull};
 
 const CAPACITY: usize = 16;
 
 pub(crate) struct Bucket {
     stores: Box<[*mut u8]>,
     bitmap: AtomicU16,
-    next: Option<*mut Bucket>,
+    next: AtomicPtr<Bucket>, //Option<*mut Bucket>,
 }
 
 impl Bucket {
-    pub(crate) fn new(size: usize) -> Self {
-        let mut base = Vec::with_capacity(CAPACITY);
+    pub(crate) fn build_chain(count: usize, size: usize) -> (AtomicPtr<Bucket>, AtomicPtr<Bucket>) {
+        let head = Box::into_raw(Box::new(Self::new(size)));
+        let mut tail = head;
 
-        (0..16).for_each(|_| {
-            let buf = make_buffer(size);
-            base.push(buf);
+        (1..count).for_each(|_| {
+            let curr = unsafe { &mut *tail };
+            let next = Box::into_raw(Box::new(Self::new(size)));
+
+            curr.next.store(next, Ordering::Release);
+            tail = next;
         });
 
-        Bucket {
-            stores: base.into_boxed_slice(),
-            bitmap: AtomicU16::new(u16::MAX),
-            next: None, //ptr::null_mut(),
-        }
+        (AtomicPtr::new(head), AtomicPtr::new(tail))
     }
 
     pub(crate) fn checkout(&mut self) -> Option<Vec<u8>> {
@@ -56,14 +56,36 @@ impl Bucket {
     }
 
     pub(crate) fn next(&mut self) -> Option<&mut Bucket> {
-        self.next.map(|ptr| {
-            unsafe { &mut *ptr }
-        })
+        let next = self.next.load(Ordering::Acquire);
+
+        if next.is_null() {
+            return None;
+        }
+
+        Some(unsafe { &mut *next })
+    }
+
+    //TODO: add `boxed` method to pack the buffer into the box directly
+    fn new(size: usize) -> Self {
+        let mut base = Vec::with_capacity(CAPACITY);
+
+        (0..16).for_each(|_| {
+            let buf = make_buffer(size);
+            base.push(buf);
+        });
+
+        Bucket {
+            stores: base.into_boxed_slice(),
+            bitmap: AtomicU16::new(u16::MAX),
+            next: AtomicPtr::new(ptr::null_mut()),
+        }
     }
 
     fn get_buf(&self, pos: usize) -> Vec<u8> {
         assert!(pos < 16);
 
-        unsafe { Vec::from_raw_parts(self.stores[pos], 0, CAPACITY) }
+        unsafe {
+            Vec::from_raw_parts(self.stores[pos], 0, CAPACITY)
+        }
     }
 }
