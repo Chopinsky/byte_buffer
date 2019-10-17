@@ -1,9 +1,9 @@
 #![allow(unused)]
 
 use crate::utils::make_buffer;
-use std::sync::atomic::{AtomicU16, Ordering, AtomicPtr};
-use std::u16;
 use std::ptr::{self, NonNull};
+use std::sync::atomic::{AtomicPtr, AtomicU16, Ordering};
+use std::u16;
 
 const CAPACITY: usize = 16;
 
@@ -27,6 +27,20 @@ impl Bucket {
         });
 
         (AtomicPtr::new(head), AtomicPtr::new(tail))
+    }
+
+    pub(crate) fn append(&mut self, next: *mut Bucket) -> bool {
+        if self
+            .next
+            .compare_exchange(
+                ptr::null_mut(), next, Ordering::SeqCst, Ordering::Relaxed
+            )
+            .is_err()
+        {
+            return false;
+        }
+
+        true
     }
 
     pub(crate) fn checkout(&mut self) -> Option<Vec<u8>> {
@@ -66,6 +80,7 @@ impl Bucket {
     }
 
     //TODO: add `boxed` method to pack the buffer into the box directly
+
     fn new(size: usize) -> Self {
         let mut base = Vec::with_capacity(CAPACITY);
 
@@ -84,8 +99,6 @@ impl Bucket {
     fn get_buf(&self, pos: usize) -> Vec<u8> {
         assert!(pos < 16);
 
-        unsafe {
-            Vec::from_raw_parts(self.stores[pos], 0, CAPACITY)
-        }
+        unsafe { Vec::from_raw_parts(self.stores[pos], 0, CAPACITY) }
     }
 }
