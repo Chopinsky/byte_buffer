@@ -49,13 +49,14 @@ impl ByteBuffer {
     }
 
     pub fn try_slice() -> Option<BufferSlice> {
-        BufferPool::exec(BufOp::Reserve(false)).and_then(|id| {
-            Some(BufferSlice {
-                id,
-                fallback: None,
-                dirty: false,
-            })
-        })
+        BufferPool::exec(BufOp::Reserve(false))
+            .map(|id|
+                BufferSlice {
+                    id,
+                    fallback: None,
+                    dirty: false,
+                }
+            )
     }
 
     #[inline]
