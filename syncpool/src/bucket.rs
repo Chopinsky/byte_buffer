@@ -5,7 +5,7 @@ use crate::pool::ElemBuilder;
 use crate::utils::{check_len, cpu_relax, enter, make_elem};
 use std::mem;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, AtomicPtr, Ordering};
 
 /// Constants
 pub(crate) const SLOT_CAP: usize = 8;
@@ -334,3 +334,43 @@ impl<T> Drop for Bucket2<T> {
 }
 
 unsafe impl<T> Send for Bucket2<T> {}
+
+pub(crate) struct RingBucket<T> {
+    /// The actual data store. Data are stored in heap and not managed by the runtime, so we must
+    /// restore them and drop the data when the bucket is dropped.
+    slot: [AtomicPtr<T>; SLOT_CAP],
+
+    /// the current ready-to-use slot count, always offset by 1 to the actual index. This may not be
+    /// a real-time reflection of how many elements are actually in the bucket, especially if other
+    /// threads are actively interact with the sync pool.
+    len: AtomicUsize,
+
+    head: AtomicUsize,
+
+    tail: AtomicUsize,
+}
+
+impl<T> RingBucket<T> {
+    /// Instantiate the bucket and set initial values. If we want to pre-fill the slots, we will also
+    /// make sure the bitmap is updated as well.
+    pub(crate) fn new(filler: Option<&ElemBuilder<T>>) -> Self {
+        // create the placeholder
+        let mut slice: [AtomicPtr<T>; SLOT_CAP] =
+            [AtomicPtr::new(ptr::null_mut()); SLOT_CAP];
+
+        // fill the slots and update the bitmap
+        if let Some(handle) = filler {
+            for (_, item) in slice.iter_mut().enumerate() {
+                item.swap(Box::into_raw(make_elem(handle), Ordering::SeqCst);
+            }
+        }
+
+        // done
+        RingBucket {
+            slot: slice,
+            len: AtomicUsize::new(SLOT_CAP),
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(SLOT_CAP),
+        }
+    }
+}
