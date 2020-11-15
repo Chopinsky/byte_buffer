@@ -355,13 +355,12 @@ impl<T> RingBucket<T> {
     /// make sure the bitmap is updated as well.
     pub(crate) fn new(filler: Option<&ElemBuilder<T>>) -> Self {
         // create the placeholder
-        let mut slice: [AtomicPtr<T>; SLOT_CAP] =
-            [AtomicPtr::new(ptr::null_mut()); SLOT_CAP];
+        let mut slice: [AtomicPtr<T>; SLOT_CAP] = Default::default();
 
         // fill the slots and update the bitmap
         if let Some(handle) = filler {
             for (_, item) in slice.iter_mut().enumerate() {
-                item.swap(Box::into_raw(make_elem(handle), Ordering::SeqCst);
+                item.swap(Box::into_raw(make_elem(handle)), Ordering::SeqCst);
             }
         }
 
