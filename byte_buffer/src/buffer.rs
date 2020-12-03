@@ -20,7 +20,6 @@ struct Store {
 
 pub(crate) struct BufferPool {
     store: Vec<Vec<u8>>,
-    //    pool: Vec<AtomicU8>,
     slice_capacity: usize,
     worker_chan: Sender<WorkerOp>,
     closing: AtomicBool,
@@ -29,12 +28,7 @@ pub(crate) struct BufferPool {
 }
 
 pub(crate) trait PoolManagement {
-    fn make(
-        store: Vec<Vec<u8>>,
-        //        pool: Vec<usize>,
-        slice_capacity: usize,
-        worker_chan: Sender<WorkerOp>,
-    );
+    fn make(store: Vec<Vec<u8>>, slice_capacity: usize, worker_chan: Sender<WorkerOp>);
     fn default_capacity() -> usize;
     fn slice_stat(id: usize, query: SliceStatusQuery) -> usize;
     fn handle_work(rx: Receiver<WorkerOp>);
@@ -47,12 +41,7 @@ pub(crate) trait PoolManagement {
 }
 
 impl PoolManagement for BufferPool {
-    fn make(
-        store: Vec<Vec<u8>>,
-        //        pool: Vec<usize>,
-        slice_capacity: usize,
-        worker_chan: Sender<WorkerOp>,
-    ) {
+    fn make(store: Vec<Vec<u8>>, slice_capacity: usize, worker_chan: Sender<WorkerOp>) {
         unsafe {
             if store.len() > SIZE_CAP.load(Ordering::SeqCst) {
                 SIZE_CAP.store(store.len(), Ordering::SeqCst);
@@ -249,14 +238,11 @@ impl PoolOps for BufferPool {
         //TODO: do not blow up the roof
 
         let capacity = self.slice_capacity;
-        let start = self.store.len();
 
         self.store.reserve(additional);
-        //        self.pool.reserve(additional);
 
-        (0..additional).for_each(|offset| {
+        (0..additional).for_each(|_| {
             self.store.push(vec::from_elem(0, capacity));
-            //            self.pool.push(start + offset);
         });
 
         // return the last element in the buffer
