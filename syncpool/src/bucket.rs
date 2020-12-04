@@ -333,7 +333,7 @@ impl<T> Drop for Bucket2<T> {
     }
 }
 
-unsafe impl<T> Send for Bucket2<T> {}
+unsafe impl<T: Send> Send for Bucket2<T> {}
 
 pub(crate) struct RingBucket<T> {
     /// The actual data store. Data are stored in heap and not managed by the runtime, so we must
