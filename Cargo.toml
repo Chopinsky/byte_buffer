@@ -1,10 +1,11 @@
 [package]
 name = "sync_tools"
+description = "a collection of libraries to promote object reuse"
 version = "0.1.1"
 authors = ["Jacob Zuo <chopinsky@live.com>"]
 license = "MIT"
 edition = "2018"
-keywords = ["atomic", "sync", "sync.Pool", "buffer"]
+keywords = ["atomic", "sync", "pool", "byte", "buffer"]
 categories = ["concurrency", "memory-management", "data-structures"]
 
 [dependencies.byte_buffer]
